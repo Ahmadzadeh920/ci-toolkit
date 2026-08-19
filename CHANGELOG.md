@@ -27,8 +27,6 @@ Consuming repositories should pin to a tag (e.g. `@v1`), never `@main`.
 - Remove the stray `DEPLOY_KEY` requirement from `reusable-sonarqube.yml`.
 - Support `GITHUB_TOKEN` directly for GHCR in `reusable-docker-build.yml` /
   `reusable-docker-push.yml`, as an alternative to `registry-password`.
-- Investigate OIDC-based authentication for cloud registries/Kubernetes
-  (see `docs/oidc.md`).
 
 ---
 
@@ -57,7 +55,6 @@ supporting documentation:
 - `docs/secrets.md` — secret name/purpose inventory (no values)
 - `docs/variables.md` — non-sensitive `vars.*` inventory
 - `docs/environments.md` — recommended GitHub Environments setup
-- `docs/oidc.md` — OIDC adoption strategy
 - `docs/migration-checklist.md` — checklist for onboarding a caller repo
 
 ### Notes

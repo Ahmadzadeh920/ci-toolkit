@@ -19,9 +19,6 @@ repository.
 - [ ] Pick exactly one deployment workflow — `reusable-deploy-docker-compose.yml`,
       `reusable-deploy-kubernetes.yml`, or `reusable-deploy-helm.yml`. There
       is no generic dispatcher; wire the one matching your infrastructure.
-- [ ] Write your own manifest/chart/compose file using the shape in
-      [`examples/`](../examples/) — do not expect one to be provided by
-      this repo.
 - [ ] Configure the correct self-hosted runner label for k3s deployments
       (`K8S_RUNNER`, default `k3s`).
 - [ ] Configure GitHub Actions permissions required by each workflow (see
