@@ -136,7 +136,7 @@ Purpose: SSH to a remote host and run Docker Compose.
 **Permissions:** not explicitly declared — defaults apply; grant
 `contents: read` from the caller.
 
-See [`examples/docker-compose/docker-compose.yml`](../examples/docker-compose/docker-compose.yml)
+See [`docker-compose/docker-compose.yml`](../docker-compose/docker-compose.yml)
 for the expected file shape.
 
 ### `reusable-deploy-kubernetes.yml`
@@ -151,8 +151,8 @@ manifest repo can be cloned; this is not a Kubernetes credential itself,
 the workflow assumes `kubectl` is already configured on the runner (e.g. a
 self-hosted `k3s` runner with a local kubeconfig).
 
-See [`examples/kubernetes/deployment.yaml`](../examples/kubernetes/deployment.yaml)
-and [`examples/kubernetes/rbac.yaml`](../examples/kubernetes/rbac.yaml) for
+See [`/k8s/deployment.yaml`](../k8s/deployment.yaml)
+and [`k8s/rbac.yaml`](../k8s/rbac.yaml) for
 the expected manifest shape and the RBAC a deploying service account needs.
 
 ### `reusable-deploy-helm.yml`
@@ -166,7 +166,7 @@ Purpose: `helm upgrade --install` a chart, with optional automatic rollback.
 **Secrets:** `DEPLOY_KEY` (same role as above — checkout access, not a
 Helm/Kubernetes credential)
 
-See [`examples/helm/`](../examples/helm/) for a minimal chart skeleton.
+See [`helm/`](../helm/) for a minimal chart skeleton.
 
 ---
 

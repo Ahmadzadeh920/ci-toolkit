@@ -580,6 +580,12 @@ Documents:
 - secret-management considerations
 
 Secret **values must never be committed** to the repository.
+## Environments
+
+[`docs/environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md)
+
+Documents recommended GitHub Environments (development/staging/production), 
+environment-specific secrets and variables, and production protection rules.
 
 ## Variables
 
@@ -849,6 +855,7 @@ This project is licensed under the [MIT License](LICENSE.md).
 | [`reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) | Complete reusable workflow contracts |
 | [`permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md) | GitHub Actions permissions |
 | [`secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md) | Secret inventory and requirements |
+| [`environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md) | GitHub Environments setup and protection rules |
 | [`variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md) | Repository/environment variables |
 | [`migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration procedure for existing repositories |
 | [`k8s/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/k8s) | Kubernetes example configuration |

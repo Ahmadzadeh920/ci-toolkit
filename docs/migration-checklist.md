@@ -48,8 +48,6 @@ repository.
 - [ ] Confirm whether `DEPLOY_KEY` is needed in `reusable-sonarqube.yml`,
       `reusable-deploy-kubernetes.yml`, and `reusable-deploy-helm.yml`, or
       whether the ambient `GITHUB_TOKEN` covers checkout in same-repo cases.
-- [ ] Replace long-lived cloud registry credentials with OIDC where the
-      registry is cloud-hosted (see [`docs/oidc.md`](oidc.md)).
 - [ ] Consider GitHub App authentication for `reusable-sync.yml` instead of
       a long-lived PAT.
 - [ ] Remove any debug steps that expose token lengths/prefixes.
