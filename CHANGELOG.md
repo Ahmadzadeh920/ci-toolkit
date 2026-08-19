@@ -34,7 +34,7 @@ Consuming repositories should pin to a tag (e.g. `@v1`), never `@main`.
 
 ### Added
 Initial extraction of the reusable workflow library from
-`auth-gateway-platform`. Thirteen `workflow_call` workflows and full
+`auth-gateway-platform`. Eleven `workflow_call` workflows and full
 supporting documentation:
 
 - `reusable-test.yml` — install, lint, test, coverage, artifact upload
