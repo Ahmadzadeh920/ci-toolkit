@@ -1,34 +1,30 @@
 # ci-toolkit
 
-**Reusable, versioned GitHub Actions workflows for standardized CI/CD across multiple repositories.**
+**Versioned, portable reusable GitHub Actions workflows for standardized CI/CD.**
 
-`ci-toolkit` is a portable library of reusable GitHub Actions workflows designed to centralize common CI/CD, security, container, deployment, notification, and repository synchronization logic.
+`ci-toolkit` is a reusable GitHub Actions workflow library for centralizing CI/CD, testing, static analysis, security scanning, Docker image workflows, deployment, notifications, and repository synchronization.
 
-Instead of copying and maintaining similar GitHub Actions YAML files in every application repository, consuming repositories can call the workflows from this repository through GitHub Actions `workflow_call`.
+Instead of duplicating similar GitHub Actions workflows across multiple repositories, application repositories can call the workflows from this repository using GitHub Actions `workflow_call`.
 
-The toolkit is designed to keep **application code, deployment configuration, infrastructure credentials, and secrets in the consuming repository**, while this repository provides the reusable CI/CD workflow contracts.
+> **Application code, deployment configuration, infrastructure credentials, and secret values remain in the consuming repository. `ci-toolkit` provides the reusable CI/CD workflow contracts.**
 
 ---
 
 ## Why this exists?
 
-Maintaining CI/CD pipelines independently in every repository leads to duplicated YAML, inconsistent security settings, different tool versions, and difficult maintenance.
+CI/CD workflows are often copied from one repository to another. Over time, those copies become different:
 
-For example, without a shared toolkit, several repositories may each contain their own:
+- different tool versions
+- different security settings
+- different permissions
+- different Docker configurations
+- different deployment logic
+- different notification mechanisms
+- different secret requirements
 
-- Python testing and linting workflow
-- CodeQL workflow
-- SonarQube workflow
-- Docker build workflow
-- Docker registry authentication
-- Trivy security scan
-- Deployment workflow
-- Notification workflow
-- Repository synchronization workflow
+Maintaining those duplicated workflows becomes increasingly difficult as the number of repositories grows.
 
-Over time, those workflows tend to diverge.
-
-`ci-toolkit` centralizes this logic into reusable workflows with explicit:
+`ci-toolkit` centralizes the reusable pipeline logic and exposes it through explicit:
 
 - `inputs`
 - `secrets`
@@ -37,132 +33,112 @@ Over time, those workflows tend to diverge.
 - runner configuration
 - deployment contracts
 
-A consuming repository only needs to provide its repository-specific configuration.
+A consuming repository can therefore use a stable workflow such as:
 
-The result is:
-
-```text
-Application repositories
-        |
-        | workflow_call
-        v
-+----------------------+
-|      ci-toolkit      |
-|                      |
-| Test / Lint          |
-| CodeQL               |
-| SonarQube            |
-| Docker Build         |
-| Docker Push          |
-| Trivy                |
-| Notifications        |
-| Deployment           |
-| Repository Sync      |
-+----------------------+
+```yaml
+jobs:
+  test:
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
 ```
 
-This repository was extracted from the CI/CD architecture originally developed for `auth-gateway-platform`.
+instead of maintaining its own copy of the complete workflow.
+
+The toolkit is designed to separate:
+
+```text
+Application repository
+        |
+        | application code
+        | deployment configuration
+        | secrets
+        | environment configuration
+        |
+        v
++--------------------------------+
+|          ci-toolkit            |
+|                                |
+| Test / Lint                    |
+| CodeQL                         |
+| SonarQube                      |
+| Docker Build                   |
+| Docker Push                    |
+| Trivy                          |
+| Notifications                  |
+| Deployment                     |
+| Repository Sync                |
++--------------------------------+
+```
 
 ---
 
 ## Use cases
 
-`ci-toolkit` can be used for:
+`ci-toolkit` is intended for repositories that want to standardize GitHub Actions without copying pipeline implementations between projects.
 
-### Multi-repository CI/CD standardization
+Typical use cases include:
 
-Use the same testing, linting, static-analysis, security-scanning, and container workflows across multiple repositories.
+- Multi-repository CI/CD standardization
+- Python and general application testing
+- Linting and test execution
+- CodeQL static analysis
+- SonarQube analysis and quality gates
+- Docker image building
+- Docker image publishing
+- Trivy security scanning
+- Slack, Microsoft Teams, and Discord notifications
+- Docker Compose deployments
+- Kubernetes/k3s deployments
+- Helm deployments
+- Repository mirroring or branch synchronization
 
-### Python and application testing
-
-The reusable test workflow supports configurable dependency installation, linting, testing, coverage collection, and artifact upload.
-
-### Static analysis
-
-Integrate GitHub CodeQL consistently across repositories.
-
-### SonarQube quality analysis
-
-Run SonarQube scans and optionally enforce quality gates using a shared workflow.
-
-### Container pipelines
-
-Build Docker images consistently and optionally:
-
-- load them locally
-- save them as artifacts
-- push them to an OCI registry
-- reuse the image in later jobs
-
-### Container security
-
-Use Trivy for:
-
-- filesystem scanning
-- image scanning
-- configuration scanning
-- SBOM scanning
-
-### Deployment standardization
-
-Deploy applications using one of three supported deployment strategies:
-
-1. **Docker Compose**
-2. **Kubernetes / k3s**
-3. **Helm**
-
-### Notifications
-
-Send pipeline notifications to:
-
-- Slack
-- Microsoft Teams
-- Discord
-
-### Repository synchronization
-
-Synchronize branches or repositories using the reusable repository-sync workflow.
+The test workflow is configurable rather than being tied to one specific application structure, while Docker and deployment workflows expose repository-specific paths and configuration through inputs.
 
 ---
 
-# Applications
+## Applications
 
-This toolkit is intended for repositories such as:
+The toolkit can be used by:
 
 - Python applications
 - Django applications
 - FastAPI services
-- backend microservices
+- backend services
+- microservices
 - Dockerized applications
 - Kubernetes applications
 - Helm-based applications
-- applications deployed with Docker Compose
+- Docker Compose applications
 - internal tools
-- services requiring standardized security scanning
-- repositories using GitHub Actions as their CI/CD platform
+- repositories requiring CodeQL or Trivy
+- repositories requiring SonarQube quality gates
 
-The toolkit is intentionally not tied to one application.
+The toolkit is not intended to own application-specific configuration.
 
-A consuming repository owns its own:
+The consuming repository remains responsible for its own:
 
 - source code
-- Dockerfile
-- Docker Compose file
+- Dockerfiles
+- Docker Compose files
 - Kubernetes manifests
-- Helm chart
+- Helm charts
 - environment configuration
+- GitHub Environments
 - secrets
-- infrastructure-specific configuration
-
-`ci-toolkit` owns the reusable pipeline logic.
+- infrastructure credentials
 
 ---
 
 # Critical structural constraint
 
-GitHub reusable workflows **must physically exist under `.github/workflows/` in the source repository**.
+GitHub reusable workflows must physically exist under:
 
-Therefore, this structure is mandatory:
+```text
+.github/workflows/
+```
+
+in the source repository.
+
+Therefore, this repository must keep reusable workflows here:
 
 ```text
 ci-toolkit/
@@ -171,39 +147,39 @@ ci-toolkit/
         └── reusable-test.yml
 ```
 
-A consuming repository references the workflow like this:
+A consuming repository references them using:
 
 ```yaml
-jobs:
-  test:
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
+uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
 ```
 
-Do **not** move reusable workflows into:
+Do **not** move reusable workflows to:
 
 ```text
-ci-toolkit/workflows/
+workflows/
 ```
 
 or:
 
 ```text
-ci-toolkit/.github/reusable-workflows/
+.github/reusable-workflows/
 ```
 
-The reusable workflow files must remain directly under:
+or another directory.
+
+The reusable workflow files must remain under:
 
 ```text
 .github/workflows/
 ```
 
-This is a critical repository structure requirement for GitHub Actions reusable workflows.
+GitHub resolves reusable workflows from that location.
 
 ---
 
 # Repository structure
 
-The current repository is organized around reusable workflows, documentation, and deployment examples:
+The current repository structure is:
 
 ```text
 ci-toolkit/
@@ -224,89 +200,138 @@ ci-toolkit/
 │       └── reusable-trivy.yml
 │
 ├── docs/
-│   ├── README.md
-│   ├── reusable-workflows.md
+│   ├── migration-checklist.md
 │   ├── permissions.md
+│   ├── reusable-workflows.md
 │   ├── secrets.md
-│   ├── variables.md
-│   ├── environments.md
-│   ├── oidc.md
-│   └── migration-checklist.md
-│
-├── helm/
-│   ├── Chart.yaml
-│   ├── deployment.yaml
-│   └── values.yaml
-│
-├── k8s/
-│   ├── deployment.yaml
-│   └── rbac.yaml
+│   └── variables.md
 │
 ├── docker-compose/
-│   └── docker-compose.yml
+│
+├── helm/
+│
+├── k8s/
 │
 ├── CHANGELOG.md
 ├── LICENSE.md
 └── README.md
 ```
 
-The repository currently contains Kubernetes examples under `k8s/`, a Helm example under `helm/`, and a Docker Compose example under `docker-compose/`.
+The repository currently contains 11 reusable workflows plus `caller-ci.yml`, which serves as a caller/example workflow.
 
-### Important distinction
+### `docker-compose/`
 
-The deployment configuration under:
+Contains Docker Compose deployment/example configuration.
+
+### `helm/`
+
+Contains Helm-related example configuration.
+
+### `k8s/`
+
+Contains Kubernetes-related example configuration.
+
+### `docs/`
+
+Contains the configuration contracts and migration documentation for consuming repositories.
+
+---
+
+# Quick start
+
+Create a workflow in your application repository:
 
 ```text
-helm/
-k8s/
-docker-compose/
+.github/workflows/ci.yml
 ```
 
-is **example/configuration material**.
-
-A consuming repository should normally keep its own deployment configuration.
+Then reference the reusable workflows from `ci-toolkit`.
 
 For example:
 
-```text
-my-application/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── helm/
-│   └── my-application/
-├── k8s/
-└── docker-compose/
+```yaml
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+jobs:
+  test:
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
+    with:
+      python-versions: '["3.11", "3.12"]'
+      working-directory: services/api
+
+  codeql:
+    needs: test
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 ```
 
-The reusable workflow receives the appropriate path through its `inputs`.
+The complete workflow contract, including inputs, secrets, permissions, and outputs, is documented in:
+
+[`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md).
+
+### Recommended adoption sequence
+
+1. Choose the reusable workflows required by your repository.
+2. Pin them to a release tag.
+3. Configure their required inputs.
+4. Create only the required secrets.
+5. Configure repository/environment variables where necessary.
+6. Configure required GitHub Actions permissions.
+7. Select one deployment strategy if deployment is required.
+8. Test the pipeline in a non-production environment.
+9. Promote the tested version to production.
+
+The migration checklist documents this process.
 
 ---
 
 # Deployment strategies
 
-One of the most important design decisions when adopting `ci-toolkit` is selecting the deployment strategy.
-
-There are **three supported deployment strategies**:
+A consuming repository has **three deployment strategy options**:
 
 ```text
                     Application
                          |
-             Choose ONE deployment strategy
+                 Choose ONE strategy
                          |
           +--------------+--------------+
           |              |              |
           v              v              v
-    Docker Compose   Kubernetes/k3s     Helm
-       SSH              kubectl         helm
+   Docker Compose   Kubernetes / k3s    Helm
           |              |              |
           v              v              v
-     Remote VM       k3s Cluster      Kubernetes
+        SSH           kubectl           helm
+          |              |              |
+          v              v              v
+    Remote host      Kubernetes        Kubernetes
+                      cluster            cluster
 ```
 
-## 1. Docker Compose
+## Important: choose exactly one
 
-Use Docker Compose when the application is deployed to a remote server or VM running Docker Compose.
+For a given application deployment, select exactly one of:
+
+1. **Docker Compose**
+2. **Kubernetes / k3s**
+3. **Helm**
+
+The toolkit does **not** provide a generic deployment dispatcher. The consuming repository directly calls the workflow corresponding to its infrastructure.
+
+---
+
+## Deployment option 1 — Docker Compose
+
+Use Docker Compose when the application runs on a remote Docker host or VM.
 
 Workflow:
 
@@ -314,15 +339,28 @@ Workflow:
 reusable-deploy-docker-compose.yml
 ```
 
-Typical requirements:
+The workflow connects to the remote host through SSH and runs Docker Compose. Its configurable inputs include:
 
-- SSH host
-- SSH user
-- SSH private key
-- Docker Compose file
-- remote deployment directory
-- Compose service
-- container image/tag
+```text
+runner
+environment
+compose-file
+image
+image-tag
+remote-directory
+compose-service
+timeout-minutes
+```
+
+and its deployment secrets are:
+
+```text
+ssh-host
+ssh-user
+ssh-private-key
+```
+
+
 
 Example:
 
@@ -343,15 +381,41 @@ jobs:
       ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 ```
 
+The Compose file belongs to the consuming repository.
+
 ---
 
-## 2. Kubernetes / k3s
+## Deployment option 2 — Kubernetes / k3s
 
-Use Kubernetes when the application is deployed to a Kubernetes cluster.
+Use the Kubernetes workflow when the application is deployed using Kubernetes manifests.
 
-This includes lightweight Kubernetes distributions such as **k3s**.
+Workflow:
 
-The toolkit supports a configurable runner label, with `k3s` commonly used for self-hosted deployment runners.
+```text
+reusable-deploy-kubernetes.yml
+```
+
+The workflow performs `kubectl apply` and waits for the application rollout.
+
+Its main inputs include:
+
+```text
+runner
+application
+namespace
+manifest
+image-repository
+image-tag
+timeout
+```
+
+The default runner is:
+
+```text
+k3s
+```
+
+The workflow assumes that `kubectl` is already configured on the runner, for example through a self-hosted k3s runner with an appropriate local kubeconfig.
 
 Example:
 
@@ -368,9 +432,7 @@ jobs:
       image-tag: ${{ github.sha }}
 ```
 
-The consuming repository owns its Kubernetes manifests.
-
-For example:
+The consuming repository owns the Kubernetes manifests:
 
 ```text
 my-app/
@@ -380,19 +442,49 @@ my-app/
     └── ingress.yaml
 ```
 
-The reusable workflow receives:
-
-```yaml
-manifest: k8s/
-```
-
-It should not assume that every consuming repository has the same Kubernetes directory structure.
+The toolkit does not assume that every application has the same Kubernetes directory.
 
 ---
 
-## 3. Helm
+## Deployment option 3 — Helm
 
-Use Helm when the application is packaged and deployed as a Helm chart.
+Use Helm when the application is packaged as a Helm chart.
+
+Workflow:
+
+```text
+reusable-deploy-helm.yml
+```
+
+The workflow performs:
+
+```text
+helm upgrade --install
+```
+
+with optional automatic rollback.
+
+Its inputs include:
+
+```text
+runner
+application
+namespace
+helm-chart
+image-repository
+image-tag
+values-file
+timeout
+atomic
+```
+
+The default runner is also:
+
+```text
+k3s
+```
+
+
 
 Example:
 
@@ -410,7 +502,7 @@ jobs:
       image-tag: ${{ github.sha }}
 ```
 
-A consuming repository may have:
+The consuming repository owns the Helm chart:
 
 ```text
 my-app/
@@ -421,113 +513,11 @@ my-app/
         └── templates/
 ```
 
-### Choosing between Kubernetes and Helm
-
-Helm is a deployment/package-management strategy on top of Kubernetes.
-
-Therefore:
-
-- choose **Kubernetes** when you want to manage raw Kubernetes manifests directly;
-- choose **Helm** when your application is packaged as a Helm chart.
-
-Do not call all three deployment workflows for the same deployment.
-
-The migration documentation recommends selecting exactly one deployment workflow for a consuming repository.
-
----
-
-# Quick start
-
-## 1. Create a workflow in your application repository
-
-Create:
-
-```text
-.github/workflows/ci.yml
-```
-
-## 2. Reference a released version
-
-Use a release tag:
-
-```yaml
-jobs:
-  test:
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
-```
-
-Avoid using:
-
-```yaml
-uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@main
-```
-
-for production pipelines.
-
-Pinning to a release provides a stable workflow contract.
-
-## 3. Configure inputs
-
-Example:
-
-```yaml
-jobs:
-  test:
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
-    with:
-      python-versions: '["3.11", "3.12"]'
-      working-directory: services/api
-```
-
-## 4. Configure required secrets
-
-Only create the secrets required by the workflow you are using.
-
-For example, Docker publishing may require:
-
-```yaml
-secrets:
-  registry-password: ${{ secrets.GITHUB_TOKEN }}
-```
-
-Deployment workflows have their own deployment-specific credentials.
-
-## 5. Configure permissions
-
-Give each reusable workflow the permissions it requires.
-
-For example, CodeQL requires:
-
-```yaml
-permissions:
-  actions: read
-  contents: read
-  security-events: write
-```
-
-## 6. Select one deployment strategy
-
-Choose:
-
-```text
-Docker Compose
-      OR
-Kubernetes / k3s
-      OR
-Helm
-```
-
-Then configure only the corresponding deployment workflow.
-
-## 7. Test before production
-
-Test the integration in a development or staging environment before promoting it to production.
-
 ---
 
 # Workflow catalog
 
-The repository currently provides the following reusable workflows:
+`ci-toolkit` currently provides **11 reusable `workflow_call` workflows**.
 
 | Workflow | Purpose |
 |---|---|
@@ -535,89 +525,94 @@ The repository currently provides the following reusable workflows:
 | `reusable-codeql.yml` | GitHub CodeQL static analysis |
 | `reusable-sonarqube.yml` | SonarQube analysis and quality gate |
 | `reusable-docker-build.yml` | Build Docker images and optionally push/save them |
-| `reusable-docker-push.yml` | Load and push a previously built Docker image |
-| `reusable-trivy.yml` | Filesystem, image, configuration, and SBOM vulnerability scanning |
-| `reusable-notification.yml` | Slack, Microsoft Teams, and Discord notifications |
+| `reusable-docker-push.yml` | Load a saved image artifact and push it |
+| `reusable-trivy.yml` | Filesystem, image, configuration, or SBOM vulnerability scanning |
+| `reusable-notification.yml` | Slack, Microsoft Teams, or Discord notifications |
 | `reusable-deploy-docker-compose.yml` | Docker Compose deployment over SSH |
 | `reusable-deploy-kubernetes.yml` | Kubernetes deployment using `kubectl` |
 | `reusable-deploy-helm.yml` | Helm-based Kubernetes deployment |
-| `reusable-sync.yml` | Synchronize/push a branch to another repository |
+| `reusable-sync.yml` | Synchronize a branch into another repository |
 
-`caller-ci.yml` is an example caller workflow rather than one of the reusable `workflow_call` contracts.
+`caller-ci.yml` is present in `.github/workflows`, but it is a caller/example workflow and is not part of the 11 reusable workflow contracts.
 
-The detailed contracts, inputs, secrets, permissions, and outputs are maintained in the reusable workflow documentation.
+For the complete contract of every workflow, including inputs, secrets, permissions, and outputs, see:
+
+[`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md).
 
 ---
 
 # Configuration reference
 
-The complete configuration reference is maintained under the [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs) directory.
+All configuration documentation is maintained under:
+
+[`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs)
 
 ## Reusable workflow contracts
 
-See:
-
 [`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md)
 
-This document defines the inputs, secrets, permissions, and outputs for each reusable workflow.
+Defines:
+
+- workflow purposes
+- inputs
+- secrets
+- permissions
+- outputs
+- deployment behavior
+
+
 
 ## Permissions
 
-See:
-
 [`docs/permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md)
 
-Use this document to determine the minimum required `GITHUB_TOKEN` permissions for each workflow.
+Documents the minimum GitHub Actions `GITHUB_TOKEN` permissions required by the workflows.
 
 ## Secrets
 
-See:
-
 [`docs/secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md)
 
-This documents secret names and their purposes.
+Documents:
 
-**Secret values must never be committed to this repository.**
+- secret names
+- which workflows use them
+- their purpose
+- secret-management considerations
+
+Secret **values must never be committed** to the repository.
 
 ## Variables
 
-See:
-
 [`docs/variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)
 
-Use repository or environment variables for non-sensitive configuration where appropriate.
+Documents recommended non-sensitive repository and environment variables.
 
-## Environments
+## Migration checklist
 
-See:
+[`docs/migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md)
 
-[`docs/environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md)
+Provides the step-by-step process for adopting `ci-toolkit` in an existing repository.
 
-This covers recommended development, staging, and production environment configuration.
-
-## OIDC
-
-See:
-
-[`docs/oidc.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/oidc.md)
-
-This describes where OIDC can replace long-lived credentials and where credentials such as SSH keys or SonarQube tokens may still be required.
+The current checklist specifically covers selecting the required workflows, configuring inputs and secrets, permissions, runner configuration, and selecting exactly one deployment workflow.
 
 ---
 
-# Deployment configuration ownership
+# Configuration ownership
 
-A reusable workflow should not assume that all repositories have the same infrastructure paths.
+A central principle of this toolkit is:
 
-For example, the toolkit does **not** require every repository to have:
+> **Reusable workflow logic belongs in `ci-toolkit`; application-specific configuration belongs in the consuming repository.**
+
+For example, `ci-toolkit` should not assume that every application has:
 
 ```text
+services/api/
 k8s/
-helm/
-docker-compose/
+helm/my-app/
+docker-compose/docker-compose.yml
 ```
 
-A consuming repository supplies its own paths.
+Instead, the consuming repository supplies its own paths.
 
 ### Kubernetes
 
@@ -630,8 +625,8 @@ with:
 
 ```yaml
 with:
-  helm-chart: helm/my-application
-  values-file: helm/my-application/values.yaml
+  helm-chart: helm/my-app
+  values-file: helm/my-app/values.yaml
 ```
 
 ### Docker Compose
@@ -641,15 +636,15 @@ with:
   compose-file: docker-compose/docker-compose.yml
 ```
 
-This separation is important because `ci-toolkit` provides the **pipeline contract**, while the consuming repository owns the actual application deployment configuration.
+This makes the workflows portable between repositories.
 
 ---
 
 # Versioning
 
-Do not use `main` for production workflow consumption.
+Production repositories should **not** consume workflows directly from `main`.
 
-Create release tags such as:
+Use release tags such as:
 
 ```text
 v1
@@ -657,24 +652,22 @@ v1.1.0
 v1.2.0
 ```
 
-Then consume workflows using:
+Then reference a stable release:
 
 ```yaml
 uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
 ```
 
-## Versioning policy
+## Major versions
 
-### Major version
-
-Increment the major version for breaking contract changes, including:
+Increment the major version for breaking contract changes such as:
 
 - removing an input
 - renaming an input
 - removing a required secret
 - renaming a secret
-- changing an output contract
-- changing behavior in a way that requires caller changes
+- removing an output
+- changing workflow behavior in a way that requires caller changes
 
 Example:
 
@@ -682,39 +675,50 @@ Example:
 v1 → v2
 ```
 
-### Minor/patch version
+## Minor and patch versions
 
 Use minor or patch releases for backward-compatible changes such as:
 
 - adding optional inputs with defaults
-- improving documentation
-- fixing workflow bugs
-- updating implementation details without changing the public contract
+- bug fixes
+- documentation improvements
+- internal workflow improvements that do not change the caller contract
 
-Consuming repositories should intentionally upgrade their toolkit version rather than silently tracking `main`.
+The migration checklist also requires consuming repositories to pin workflow references to a release tag rather than `main`.
 
 ---
 
 # Security notes
 
-Security is a core requirement of this toolkit.
+Security-sensitive configuration belongs in the consuming repository, not in `ci-toolkit`.
 
-## Never store secrets in this repository
+## Never commit secret values
 
-This repository must never contain:
+Never commit:
 
 - private keys
-- kubeconfigs
 - passwords
 - access tokens
-- registry credentials
-- webhook URLs
-- SonarQube tokens
+- kubeconfigs
 - SSH credentials
+- webhook URLs
+- registry credentials
+- SonarQube tokens
 
-Only secret **names and purposes** should be documented.
+The repository should document secret **names and purposes**, not secret values.
 
-## Use minimum GitHub permissions
+## Use least-privilege permissions
+
+Grant only the permissions required by each workflow.
+
+For example, CodeQL requires:
+
+```yaml
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+```
 
 Do not use:
 
@@ -722,115 +726,76 @@ Do not use:
 permissions: write-all
 ```
 
-Grant only the permissions required by each workflow.
+unless there is a specific and justified requirement.
 
-For example, CodeQL requires security-event write access, while many workflows only need:
+## Protect deployment secrets
 
-```yaml
-permissions:
-  contents: read
-```
+Use GitHub Actions secrets and, where appropriate, GitHub Environments for deployment credentials.
 
-## Prefer `GITHUB_TOKEN`
+Production environments can be protected with:
 
-Where supported, prefer the automatically provided:
+- required reviewers
+- environment-specific secrets
+- deployment restrictions
 
-```text
-GITHUB_TOKEN
-```
+## Self-hosted Kubernetes/k3s runners
 
-over long-lived personal access tokens.
-
-## Protect deployment credentials
-
-Deployment credentials should be stored as GitHub Actions secrets and, where appropriate, protected through GitHub Environments.
-
-For production deployment, consider:
+Kubernetes and Helm workflows can run on a self-hosted runner labeled:
 
 ```text
-production environment
-        |
-        +-- required reviewers
-        +-- protected secrets
-        +-- deployment restrictions
+k3s
 ```
 
-## Self-hosted runners
+The runner must have the required Kubernetes tooling and access to the target cluster.
 
-Kubernetes/k3s deployments may use a self-hosted runner with a label such as:
+The workflow itself should not contain cluster-specific credentials or hard-coded infrastructure addresses.
 
-```yaml
-runner: k3s
+## Docker Compose SSH deployment
+
+Docker Compose deployment requires SSH credentials supplied by the consuming repository:
+
+```text
+ssh-host
+ssh-user
+ssh-private-key
 ```
 
-The runner must have the appropriate Kubernetes tooling and access to the target cluster.
-
-The toolkit should not contain cluster-specific credentials or hard-coded infrastructure addresses.
-
-## SSH deployments
-
-Docker Compose deployment uses SSH credentials supplied by the consuming repository.
-
-SSH credentials should be stored as GitHub secrets and should not be committed to Git.
-
-Where possible, manage SSH host keys securely rather than disabling host-key verification.
+These values must be stored as GitHub Actions secrets and never committed to Git.
 
 ---
 
 # Migrating an existing repo onto this toolkit
 
-If you already have a repository with its own CI/CD workflows, use the migration checklist:
+Use the complete migration checklist:
 
 [`docs/migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md)
 
-The migration process should include:
+The migration process is:
 
 1. Confirm that the repository can access `ci-toolkit`.
-2. Select the reusable workflows you actually need.
-3. Pin workflow references to a release tag.
-4. Configure the required `workflow_call` inputs.
+2. Pin workflow references to a release tag.
+3. Identify the workflows actually required.
+4. Configure all required `workflow_call` inputs.
 5. Create only the required secrets.
-6. Configure repository/environment variables.
+6. Configure non-sensitive variables.
 7. Configure GitHub Environments where required.
-8. Configure the necessary GitHub Actions permissions.
-9. Select **one** deployment strategy.
-10. Move/retain application-specific deployment configuration in the consuming repository.
-11. Configure the appropriate runner.
-12. Test in development or staging.
-13. Promote the tested configuration to production.
+8. Select **exactly one deployment strategy**.
+9. Keep the application's own manifest, Helm chart, or Compose file in the consuming repository.
+10. Configure the correct self-hosted runner where required.
+11. Configure the required GitHub Actions permissions.
+12. Verify registry, SonarQube, deployment, and notification credentials as applicable.
+13. Test in a non-production environment.
+14. Promote the tested workflow version to production.
 
-The complete checklist is maintained in the migration document.
-
----
-
-# Recommended migration architecture
-
-For an existing repository, the recommended target structure is:
+The repository's migration checklist explicitly recommends choosing one of:
 
 ```text
-application-repository/
-│
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-│
-├── k8s/                       # if Kubernetes deployment is selected
-│   ├── deployment.yaml
-│   └── service.yaml
-│
-├── helm/                      # if Helm deployment is selected
-│   └── application/
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
-│
-├── docker-compose/            # if Compose deployment is selected
-│   └── docker-compose.yml
-│
-└── application source code
+reusable-deploy-docker-compose.yml
+reusable-deploy-kubernetes.yml
+reusable-deploy-helm.yml
 ```
 
-Only the deployment configuration corresponding to your selected deployment strategy needs to be maintained.
+for deployment.
 
 ---
 
@@ -838,35 +803,35 @@ Only the deployment configuration corresponding to your selected deployment stra
 
 Contributions are welcome.
 
-When contributing a reusable workflow:
+When adding or modifying a reusable workflow:
 
-1. Keep the workflow under `.github/workflows/`.
-2. Keep the workflow generic and repository-independent.
+1. Keep reusable workflows under `.github/workflows/`.
+2. Keep workflows generic and repository-independent.
 3. Avoid hard-coded application paths.
 4. Avoid hard-coded infrastructure addresses.
 5. Never commit secrets.
 6. Define explicit `workflow_call` inputs.
 7. Define required secrets clearly.
 8. Document required permissions.
-9. Update `docs/reusable-workflows.md` when the contract changes.
-10. Update `CHANGELOG.md`.
-11. Test the workflow before creating a release.
+9. Update `docs/reusable-workflows.md` when the workflow contract changes.
+10. Update the relevant documentation.
+11. Update `CHANGELOG.md`.
+12. Test the workflow before creating a release.
 
-## Contract changes
+## Breaking changes
 
-Changes to the reusable workflow contract must be treated carefully.
+Changes such as these are breaking changes:
 
-Breaking changes include:
+- renaming an input
+- removing an input
+- renaming a secret
+- removing a required secret
+- removing an output
+- changing a required workflow behavior
 
-- renaming inputs
-- removing inputs
-- changing required secrets
-- removing outputs
-- changing required behavior
+Breaking changes should receive a new major version.
 
-Breaking changes require a major version.
-
-Backward-compatible additions should use a minor or patch release.
+Backward-compatible changes should use a minor or patch release.
 
 ---
 
@@ -876,40 +841,41 @@ This project is licensed under the [MIT License](LICENSE.md).
 
 ---
 
-# Related documentation
+# Documentation
 
 | Resource | Description |
 |---|---|
-| [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs) | Complete documentation |
-| [`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) | Workflow contracts |
-| [`docs/migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration guide |
-| [`docs/permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md) | GitHub Actions permissions |
-| [`docs/secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md) | Secret inventory |
-| [`docs/variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md) | Variables inventory |
-| [`docs/environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md) | Environment configuration |
-| [`docs/oidc.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/oidc.md) | OIDC strategy |
-| [`helm/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/helm) | Helm example configuration |
+| [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs) | Complete configuration documentation |
+| [`reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) | Complete reusable workflow contracts |
+| [`permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md) | GitHub Actions permissions |
+| [`secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md) | Secret inventory and requirements |
+| [`variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md) | Repository/environment variables |
+| [`migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration procedure for existing repositories |
 | [`k8s/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/k8s) | Kubernetes example configuration |
+| [`helm/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/helm) | Helm example configuration |
 | [`docker-compose/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docker-compose) | Docker Compose example configuration |
 
 ---
 
 # Summary
 
-`ci-toolkit` provides reusable CI/CD building blocks while keeping application-specific configuration inside the consuming repository.
+`ci-toolkit` provides reusable GitHub Actions workflow contracts while keeping application-specific configuration in the consuming repository.
 
-The key design principles are:
+The key principles are:
 
-- **Reusable workflows live in `.github/workflows/`.**
-- **Workflow contracts are explicitly documented.**
+- **Reusable workflows live under `.github/workflows/`.**
+- **There are currently 11 reusable workflow contracts.**
+- **`caller-ci.yml` is an example caller, not a reusable workflow.**
 - **Secrets remain in the consuming repository.**
-- **Infrastructure configuration remains in the consuming repository.**
-- **Production workflows should use release tags.**
-- **Permissions should follow least privilege.**
-- **Each application chooses one deployment strategy:**
+- **Application deployment configuration remains in the consuming repository.**
+- **Production workflows should use release tags rather than `main`.**
+- **GitHub Actions permissions should follow least privilege.**
+- **Kubernetes/k3s deployments use a runner with Kubernetes access already configured.**
+- **A repository should select exactly one deployment strategy:**
   - **Docker Compose**
   - **Kubernetes / k3s**
   - **Helm**
-- **The toolkit provides pipeline logic; the application repository owns its deployment configuration.**
+- **There is no generic deployment dispatcher.**
+- **The toolkit provides pipeline logic; the application repository owns its application and infrastructure configuration.**
 
-For a new repository, start with the [migration checklist](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) and then use the [reusable workflow contracts](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) to configure the workflows you need.
+Start with the [migration checklist](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md), then use the [reusable workflow contracts](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) to configure the workflows required by your repository.
