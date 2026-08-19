@@ -1,0 +1,329 @@
+name: Reusable Deploy Kubernetes
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: "GitHub Actions runner label"
+        required: false
+        type: string
+        default: k3s
+
+      application:
+        description: "Kubernetes application/deployment name"
+        required: true
+        type: string
+
+      namespace:
+        description: "Kubernetes namespace"
+        required: true
+        type: string
+
+      manifest:
+        description: "Kubernetes manifest file or directory"
+        required: true
+        type: string
+
+      image-repository:
+        description: "Container image repository"
+        required: false
+        type: string
+        default: ""
+
+      image-tag:
+        description: "Container image tag"
+        required: false
+        type: string
+        default: ""
+
+      timeout:
+        description: "Deployment rollout timeout"
+        required: false
+        type: string
+        default: "180s"
+    secrets:
+      DEPLOY_KEY:
+        description: "deploy key"
+        required: true
+
+
+jobs:
+
+  ######################################################################
+  # Deploy
+  ######################################################################
+
+  deploy:
+
+    name: Deploy Kubernetes - ${{ inputs.application }}
+
+    runs-on: ${{ inputs.runner }}
+
+    steps:
+
+      ####################################################################
+      # Checkout
+      ####################################################################
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+
+      ####################################################################
+      # Verify kubectl
+      ####################################################################
+
+      - name: Check kubectl
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking kubectl..."
+
+          command -v kubectl
+
+          kubectl version --client
+
+
+      ####################################################################
+      # Check Kubernetes connection
+      ####################################################################
+
+      - name: Check Kubernetes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking Kubernetes cluster..."
+
+          kubectl cluster-info
+
+          echo
+
+          echo "Nodes:"
+
+          kubectl get nodes
+
+
+      ####################################################################
+      # Create namespace
+      ####################################################################
+
+      - name: Create namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Ensuring namespace exists..."
+
+          kubectl create namespace "${{ inputs.namespace }}" \
+            --dry-run=client \
+            -o yaml |
+            kubectl apply -f -
+
+
+      ####################################################################
+      # Check GHCR secret
+      ####################################################################
+
+      - name: Check GHCR image pull secret
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking GHCR image pull secret..."
+
+          if kubectl get secret ghcr-secret \
+              --namespace "${{ inputs.namespace }}" \
+              >/dev/null 2>&1; then
+
+            echo "GHCR secret exists."
+
+          else
+
+            echo "::warning::ghcr-secret does not exist in namespace '${{ inputs.namespace }}'."
+
+          fi
+
+
+      ####################################################################
+      # Validate manifests
+      ####################################################################
+
+      - name: Validate Kubernetes manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Validating Kubernetes manifests..."
+
+          kubectl apply \
+            --dry-run=server \
+            -f "${{ inputs.manifest }}"
+
+
+      ####################################################################
+      # Update image
+      ####################################################################
+
+      - name: Update container image
+        if: inputs.image-repository != '' && inputs.image-tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ inputs.image-repository }}:${{ inputs.image-tag }}"
+
+          echo "Deploying image:"
+          echo "${IMAGE}"
+
+          kubectl set image \
+            deployment/"${{ inputs.application }}" \
+            "*=${IMAGE}" \
+            --namespace "${{ inputs.namespace }}" \
+            || true
+
+
+      ####################################################################
+      # Apply manifests
+      ####################################################################
+
+      - name: Apply Kubernetes manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Applying Kubernetes manifests..."
+
+          kubectl apply \
+            -f "${{ inputs.manifest }}" \
+            --namespace "${{ inputs.namespace }}"
+
+
+      ####################################################################
+      # Wait for rollout
+      ####################################################################
+
+      - name: Wait for deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for deployment rollout..."
+
+          kubectl rollout status \
+            deployment/"${{ inputs.application }}" \
+            --namespace "${{ inputs.namespace }}" \
+            --timeout="${{ inputs.timeout }}"
+
+
+      ####################################################################
+      # Verify deployment
+      ####################################################################
+
+      - name: Verify deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "Deployment Verification"
+          echo "=========================================="
+
+          echo
+          echo "Deployment:"
+
+          kubectl get deployment \
+            "${{ inputs.application }}" \
+            --namespace "${{ inputs.namespace }}" \
+            -o wide
+
+          echo
+          echo "Pods:"
+
+          kubectl get pods \
+            --namespace "${{ inputs.namespace }}" \
+            -o wide
+
+          echo
+          echo "Services:"
+
+          kubectl get services \
+            --namespace "${{ inputs.namespace }}"
+
+          echo
+          echo "Ingress:"
+
+          kubectl get ingress \
+            --namespace "${{ inputs.namespace }}" \
+            || true
+
+
+      ####################################################################
+      # Deployment summary
+      ####################################################################
+
+      - name: Deployment Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Kubernetes Deployment"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Application | ${{ inputs.application }} |"
+            echo "| Namespace | ${{ inputs.namespace }} |"
+            echo "| Manifest | ${{ inputs.manifest }} |"
+            echo "| Image | ${{ inputs.image-repository }}:${{ inputs.image-tag }} |"
+            echo "| Runner | ${{ inputs.runner }} |"
+            echo "| Timeout | ${{ inputs.timeout }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+      ####################################################################
+      # Diagnostics
+      ####################################################################
+
+      - name: Deployment diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "=========================================="
+          echo "Deployment Diagnostics"
+          echo "=========================================="
+
+          echo
+          echo "===== Deployments ====="
+
+          kubectl get deployments \
+            --namespace "${{ inputs.namespace }}" \
+            -o wide \
+            || true
+
+          echo
+          echo "===== Pods ====="
+
+          kubectl get pods \
+            --namespace "${{ inputs.namespace }}" \
+            -o wide \
+            || true
+
+          echo
+          echo "===== Pod Descriptions ====="
+
+          kubectl describe pods \
+            --namespace "${{ inputs.namespace }}" \
+            || true
+
+          echo
+          echo "===== Events ====="
+
+          kubectl get events \
+            --namespace "${{ inputs.namespace }}" \
+            --sort-by='.lastTimestamp' \
+            || true

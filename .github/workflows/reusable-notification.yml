@@ -1,0 +1,213 @@
+name: Reusable Notification
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      channel:
+        description: slack | teams | discord
+        required: true
+        type: string
+
+      status:
+        description: success | failure | cancelled | warning
+        required: true
+        type: string
+
+      title:
+        description: Notification title
+        required: true
+        type: string
+
+      message:
+        description: Notification message
+        required: true
+        type: string
+
+      environment:
+        description: Deployment environment
+        required: false
+        type: string
+        default: ""
+
+      application:
+        description: Application name
+        required: false
+        type: string
+        default: ""
+
+      color:
+        description: Hex color for Slack/Discord
+        required: false
+        type: string
+        default: "#2EB886"
+
+      include-github-context:
+        description: Include workflow metadata
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+
+      slack-webhook:
+        required: false
+
+      teams-webhook:
+        required: false
+
+      discord-webhook:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+
+  notify:
+
+    runs-on: ${{ inputs.runner }}
+
+    steps:
+
+      ############################################################
+      # Build Notification
+      ############################################################
+
+      - name: Build Payload
+        id: payload
+        shell: bash
+
+        run: |
+
+          if [[ "${{ inputs.include-github-context }}" == "true" ]]; then
+
+            BODY="${{ inputs.message }}
+
+            Repository : ${{ github.repository }}
+            Workflow   : ${{ github.workflow }}
+            Run Number : ${{ github.run_number }}
+            Actor      : ${{ github.actor }}
+            Branch     : ${{ github.ref_name }}
+            Commit     : ${{ github.sha }}
+            Environment: ${{ inputs.environment }}"
+
+          else
+
+          BODY="${{ inputs.message }}"
+
+          fi
+
+          {
+            echo "BODY<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+############################################################
+# Slack
+############################################################
+
+      - name: Notify Slack
+
+        if: inputs.channel == 'slack'
+
+        shell: bash
+
+        run: |
+
+          curl -X POST "${{ secrets.slack-webhook }}" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"attachments\": [{
+              \"color\": \"${{ inputs.color }}\",
+              \"title\": \"${{ inputs.title }}\",
+              \"text\": \"${{ steps.payload.outputs.BODY }}\"
+            }]
+          }"
+############################################################
+# Microsoft Teams
+############################################################
+
+      - name: Notify Teams
+
+        if: inputs.channel == 'teams'
+
+        shell: bash
+
+        run: |
+
+          curl \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"title\":\"${{ inputs.title }}\",
+            \"text\":\"${{ steps.payload.outputs.BODY }}\"
+          }" \
+          "${{ secrets.teams-webhook }}"
+
+
+############################################################
+# Debug Discord Webhook
+############################################################
+
+      - name: Check Discord Webhook
+
+        if: inputs.channel == 'discord'
+
+        env:
+          WEBHOOK: ${{ secrets.discord-webhook }}
+
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "❌ Discord webhook secret is empty."
+            exit 1
+          fi
+
+          echo "✅ Discord webhook exists."
+          echo "Webhook length: ${#WEBHOOK}"
+          echo "Webhook prefix: ${WEBHOOK:0:35}..."
+
+
+############################################################
+# Discord
+############################################################
+
+      - name: Notify Discord
+
+        if: inputs.channel == 'discord'
+
+        shell: bash
+
+        run: |
+          curl -v \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"content\":\"**${{ inputs.title }}**\n\n${{ steps.payload.outputs.BODY }}\"
+            }" \
+            "$WEBHOOK"
+
+############################################################
+# Summary
+############################################################
+
+      - name: Workflow Summary
+
+        if: always()
+
+        run: |
+
+          echo "## Notification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Channel | ${{ inputs.channel }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ inputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Application | ${{ inputs.application }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY

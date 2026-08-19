@@ -1,0 +1,237 @@
+name: Reusable Python Test
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      python-versions:
+        description: JSON array of Python versions
+        required: false
+        type: string
+        default: '["3.12"]'
+
+      working-directory:
+        description: Project directory
+        required: false
+        type: string
+        default: .
+
+      requirements-file:
+        description: Requirements file
+        required: false
+        type: string
+        default: requirements.txt
+
+      dependency-manager:
+        description: pip | poetry
+        required: false
+        type: string
+        default: pip
+
+      install-command:
+        description: Optional custom install command
+        required: false
+        type: string
+        default: ""
+
+      lint:
+        type: boolean
+        required: false
+        default: true
+
+      lint-command:
+        type: string
+        required: false
+        default: "ruff check ."
+
+      run-tests:
+        type: boolean
+        required: false
+        default: true
+
+      test-command:
+        type: string
+        required: false
+        default: >-
+          pytest
+          --junitxml=tests/test-results.xml
+          --cov=app
+          --cov-report=xml:coverage.xml
+
+      upload-artifacts:
+        type: boolean
+        required: false
+        default: true
+
+      artifact-name:
+        type: string
+        required: false
+        default: test-results
+
+      test-report-path:
+        type: string
+        required: false
+        default: tests/test-results.xml
+
+      coverage-report-path:
+        type: string
+        required: false
+        default: coverage.xml
+
+      fail-fast:
+        type: boolean
+        required: false
+        default: false
+
+      timeout-minutes:
+        type: number
+        required: false
+        default: 20
+
+    outputs:
+
+      artifact-name:
+        description: Uploaded artifact name
+        value: ${{ jobs.test.outputs.artifact-name }}
+
+      coverage-report:
+        description: Coverage report location
+        value: ${{ jobs.test.outputs.coverage-report }}
+
+permissions:
+  contents: read
+
+jobs:
+
+  test:
+
+    name: Python ${{ matrix.python-version }}
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix:
+        python-version: ${{ fromJson(inputs.python-versions) }}
+
+    outputs:
+      artifact-name: ${{ inputs.artifact-name }}
+      coverage-report: ${{ inputs.coverage-report-path }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+
+      ############################################################
+      # Checkout
+      ############################################################
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      ############################################################
+      # Python
+      ############################################################
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      ############################################################
+      # Cache
+      ############################################################
+
+      - name: Cache pip
+        if: inputs.dependency-manager == 'pip'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: >-
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-${{
+            hashFiles(inputs.requirements-file)
+            }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      ############################################################
+      # Install Dependencies
+      ############################################################
+
+      - name: Upgrade pip
+        if: inputs.dependency-manager == 'pip'
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        if: inputs.dependency-manager == 'pip' && inputs.install-command == ''
+        run: |
+          pip install -r "${{ inputs.requirements-file }}"
+          pip install pytest pytest-cov ruff
+
+      - name: Custom install
+        if: inputs.install-command != ''
+        run: ${{ inputs.install-command }}
+
+      ############################################################
+      # Lint
+      ############################################################
+
+      - name: Run Linter
+        if: inputs.lint
+        run: ${{ inputs.lint-command }}
+
+      ############################################################
+      # Tests
+      ############################################################
+
+      - name: Run Tests
+        if: inputs.run-tests
+        run: ${{ inputs.test-command }}
+
+      ############################################################
+      # Upload Reports
+      ############################################################
+
+      - name: Upload Test Reports
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: >-
+            ${{ inputs.artifact-name }}-${{ matrix.python-version }}
+          if-no-files-found: error
+          path: |
+            ${{ inputs.working-directory }}/${{ inputs.test-report-path }}
+            ${{ inputs.working-directory }}/${{ inputs.coverage-report-path }}
+
+      ############################################################
+      # Summary
+      ############################################################
+
+      - name: Job Summary
+        if: always()
+        run: |
+          {
+            echo "## Python Test Summary"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| Python | ${{ matrix.python-version }} |"
+            echo "| Runner | ${{ inputs.runner }} |"
+            echo "| Directory | ${{ inputs.working-directory }} |"
+            echo "| Lint | ${{ inputs.lint }} |"
+            echo "| Tests | ${{ inputs.run-tests }} |"
+            echo "| Artifact | ${{ inputs.artifact-name }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

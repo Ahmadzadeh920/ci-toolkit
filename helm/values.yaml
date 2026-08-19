@@ -1,0 +1,18 @@
+replicaCount: 1
+
+image:
+  repository: REGISTRY/IMAGE
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix

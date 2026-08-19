@@ -1,0 +1,271 @@
+name: Reusable Trivy Security Scan
+
+on:
+  workflow_call:
+
+    inputs:
+
+      ##########################################################
+      # Runner
+      ##########################################################
+
+      runner:
+        description: GitHub runner
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      ##########################################################
+      # Scan
+      ##########################################################
+
+      scan-type:
+        description: fs | image | config | sbom
+        required: false
+        type: string
+        default: fs
+
+      scan-target:
+        description: Directory, image name or SBOM file
+        required: true
+        type: string
+
+      ##########################################################
+      # Docker Image Artifact
+      ##########################################################
+
+      download-artifact:
+        description: Download Docker image artifact
+        required: false
+        type: boolean
+        default: false
+
+      artifact-name:
+        description: Docker image artifact name
+        required: false
+        type: string
+        default: docker-image
+
+      ##########################################################
+      # Scan Configuration
+      ##########################################################
+
+      severity:
+        description: Severity levels
+        required: false
+        type: string
+        default: CRITICAL,HIGH
+
+      scanners:
+        description: vuln,secret,config,license
+        required: false
+        type: string
+        default: vuln
+
+      ignore-unfixed:
+        required: false
+        type: boolean
+        default: false
+
+      exit-code:
+        required: false
+        type: number
+        default: 0
+
+      format:
+        description: table,json,sarif
+        required: false
+        type: string
+        default: sarif
+
+      ##########################################################
+      # Reports
+      ##########################################################
+
+      upload-sarif:
+        required: false
+        type: boolean
+        default: true
+
+      upload-artifact:
+        required: false
+        type: boolean
+        default: true
+
+      report-artifact-name:
+        required: false
+        type: string
+        default: trivy-report
+
+      ##########################################################
+      # Job
+      ##########################################################
+
+      timeout-minutes:
+        required: false
+        type: number
+        default: 30
+
+    outputs:
+
+      report:
+        description: Report filename
+        value: ${{ jobs.trivy.outputs.report }}
+
+      format:
+        description: Report format
+        value: ${{ jobs.trivy.outputs.format }}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+
+  trivy:
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    outputs:
+
+      report: trivy-results.${{ inputs.format }}
+
+      format: ${{ inputs.format }}
+
+    steps:
+
+      ##########################################################
+      # Checkout
+      ##########################################################
+
+      - name: Checkout
+
+        if: inputs.scan-type != 'image'
+
+        uses: actions/checkout@v4
+
+      ##########################################################
+      # Cache Trivy DB
+      ##########################################################
+
+      - name: Cache Trivy Database
+
+        uses: actions/cache@v4
+
+        with:
+
+          path: ~/.cache/trivy
+
+          key: trivy-${{ runner.os }}-${{ hashFiles('**/Dockerfile') }}
+
+          restore-keys: |
+            trivy-
+
+      ##########################################################
+      # Download Docker Image
+      ##########################################################
+
+      - name: Download Docker Image
+
+        if: inputs.scan-type == 'image' && inputs.download-artifact
+
+        uses: actions/download-artifact@v4
+
+        with:
+
+          name: ${{ inputs.artifact-name }}
+
+      ##########################################################
+      # Load Docker Image
+      ##########################################################
+
+      - name: Load Docker Image
+
+        if: inputs.scan-type == 'image' && inputs.download-artifact
+
+        run: |
+          docker load -i image.tar
+
+      ##########################################################
+      # Trivy Scan
+      ##########################################################
+
+      - name: Run Trivy
+
+        uses: aquasecurity/trivy-action@v0.36.0
+
+        with:
+
+          scan-type: ${{ inputs.scan-type }}
+
+          scan-ref: ${{ inputs.scan-target }}
+
+          format: ${{ inputs.format }}
+
+          output: trivy-results.${{ inputs.format }}
+
+          severity: ${{ inputs.severity }}
+
+          scanners: ${{ inputs.scanners }}
+
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+
+          exit-code: ${{ inputs.exit-code }}
+
+      ##########################################################
+      # Upload SARIF
+      ##########################################################
+
+      - name: Upload SARIF
+
+        if: inputs.upload-sarif && inputs.format == 'sarif'
+
+        uses: github/codeql-action/upload-sarif@v3
+
+        with:
+
+          sarif_file: trivy-results.sarif
+
+      ##########################################################
+      # Upload Report
+      ##########################################################
+
+      - name: Upload Report
+
+        if: inputs.upload-artifact
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: ${{ inputs.report-artifact-name }}
+
+          path: trivy-results.${{ inputs.format }}
+
+          retention-days: 7
+
+      ##########################################################
+      # Summary
+      ##########################################################
+
+      - name: Summary
+
+        if: always()
+
+        shell: bash
+
+        run: |
+          {
+            echo "## Trivy Security Scan"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Scan Type | ${{ inputs.scan-type }} |"
+            echo "| Target | ${{ inputs.scan-target }} |"
+            echo "| Severity | ${{ inputs.severity }} |"
+            echo "| Scanners | ${{ inputs.scanners }} |"
+            echo "| Ignore Unfixed | ${{ inputs.ignore-unfixed }} |"
+            echo "| Report | trivy-results.${{ inputs.format }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

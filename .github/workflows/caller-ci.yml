@@ -1,0 +1,105 @@
+# Example: place this in a consuming repository at .github/workflows/ci.yml
+# Replace `your-org/ci-toolkit@v1` with your actual toolkit repo and tag.
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    uses: your-org/ci-toolkit/.github/workflows/reusable-test.yml@v1
+    with:
+      python-versions: '["3.11", "3.12"]'
+      working-directory: .
+
+  codeql:
+    uses: your-org/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  sonarqube:
+    needs: test
+    uses: your-org/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
+    secrets:
+      sonar-token: ${{ secrets.SONAR_TOKEN }}
+      sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+  docker-build:
+    needs: test
+    uses: your-org/ci-toolkit/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      image-name: my-app
+      registry-username: ${{ github.repository_owner }}
+      push: true
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  trivy:
+    needs: docker-build
+    uses: your-org/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      scan-type: image
+      scan-target: ghcr.io/${{ github.repository_owner }}/my-app:${{ github.sha }}
+
+  # --- Choose ONE deployment target below ---
+
+  deploy-compose:
+    needs: docker-build
+    if: false # enable this job if you deploy via Docker Compose over SSH
+    uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml@v1
+    with:
+      environment: production
+      compose-file: examples/docker-compose/docker-compose.yml
+      image: ghcr.io/${{ github.repository_owner }}/my-app
+      image-tag: ${{ github.sha }}
+      remote-directory: /opt/my-app
+    secrets:
+      ssh-host: ${{ secrets.SSH_HOST }}
+      ssh-user: ${{ secrets.SSH_USER }}
+      ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+  deploy-kubernetes:
+    needs: docker-build
+    if: false # enable this job if you deploy via kubectl
+    uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+    with:
+      application: my-app
+      namespace: my-namespace
+      manifest: examples/kubernetes/deployment.yaml
+      image-repository: ghcr.io/${{ github.repository_owner }}/my-app
+      image-tag: ${{ github.sha }}
+    secrets:
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+  deploy-helm:
+    needs: docker-build
+    if: false # enable this job if you deploy via Helm
+    uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-helm.yml@v1
+    with:
+      application: my-app
+      namespace: my-namespace
+      helm-chart: examples/helm
+      image-repository: ghcr.io/${{ github.repository_owner }}/my-app
+      image-tag: ${{ github.sha }}
+    secrets:
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+  notify:
+    needs: [docker-build]
+    if: always()
+    uses: your-org/ci-toolkit/.github/workflows/reusable-notification.yml@v1
+    with:
+      channel: slack
+      status: ${{ needs.docker-build.result }}
+      title: my-app deployment
+    secrets:
+      slack-webhook: ${{ secrets.SLACK_WEBHOOK }}

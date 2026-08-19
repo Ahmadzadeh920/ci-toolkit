@@ -1,0 +1,242 @@
+name: Reusable Docker Push
+
+on:
+  workflow_call:
+
+    inputs:
+
+      ##########################################################
+      # Runner
+      ##########################################################
+
+      runner:
+        description: GitHub runner
+        type: string
+        required: false
+        default: ubuntu-latest
+
+      ##########################################################
+      # Registry
+      ##########################################################
+
+      registry:
+        description: Container registry
+        type: string
+        required: false
+        default: ghcr.io
+
+      registry-username:
+        description: Registry username or organization
+        type: string
+        required: true
+
+      ##########################################################
+      # Image
+      ##########################################################
+
+      image-name:
+        description: Local image name
+        type: string
+        required: true
+
+      image-tag:
+        description: Image tag
+        type: string
+        required: false
+        default: latest
+
+      ##########################################################
+      # Artifact
+      ##########################################################
+
+      artifact-name:
+        description: Docker image artifact name
+        type: string
+        required: false
+        default: docker-image
+
+      ##########################################################
+      # Job
+      ##########################################################
+
+      timeout-minutes:
+        description: Job timeout
+        type: number
+        required: false
+        default: 30
+
+    secrets:
+
+      registry-password:
+        description: Registry password or token
+        required: true
+
+    outputs:
+
+      image:
+        description: Fully qualified image name
+        value: ${{ jobs.push.outputs.image }}
+
+      digest:
+        description: Image digest
+        value: ${{ jobs.push.outputs.digest }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+
+  push:
+
+    name: Push Docker Image
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    outputs:
+
+      image: ${{ steps.image.outputs.image }}
+
+      digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+
+      ##########################################################
+      # Download Artifact
+      ##########################################################
+
+      - name: Download Docker Image
+
+        uses: actions/download-artifact@v4
+
+        with:
+
+          name: ${{ inputs.artifact-name }}
+
+      ##########################################################
+      # List artifact contents
+      ##########################################################
+
+
+      - name: List artifact contents
+        run: |
+          pwd
+          ls -lah
+
+
+      ##########################################################
+      # Load Image
+      ##########################################################
+
+      - name: Load Docker Image
+
+        run: |
+
+          docker load -i image.tar
+
+      ##########################################################
+      # Show Loaded Images
+      ##########################################################
+   
+      - name: Show Loaded Images
+        run: |
+          docker images
+
+      ##########################################################
+      # Login
+      ##########################################################
+
+      - name: Login to Registry
+
+        uses: docker/login-action@v3
+
+        with:
+
+          registry: ${{ inputs.registry }}
+
+          username: ${{ inputs.registry-username }}
+
+          password: ${{ secrets.registry-password }}
+
+      ##############################################################################
+      # Debug Inputs 
+      ###############################################################################
+      - name: Debug Inputs
+        run: |
+          echo "registry=${{ inputs.registry }}"
+          echo "registry-username=${{ inputs.registry-username }}"
+          echo "image-name=${{ inputs.image-name }}"
+          echo "image-tag=${{ inputs.image-tag }}"
+  
+
+      
+
+      ##########################################################
+      # Tag Image
+      ##########################################################
+
+      - name: Tag Docker Image
+
+        run: |
+
+          docker tag \
+          ${{ inputs.image-name }}:${{ inputs.image-tag }} \
+          ${{ inputs.registry }}/${{ inputs.registry-username }}/${{ inputs.image-name }}:${{ inputs.image-tag }}
+         
+      ##########################################################
+      # Push Image
+      ##########################################################
+
+      - name: Push Docker Image
+        id: push
+        shell: bash
+        run: |
+            IMAGE="${{ inputs.registry }}/${{ inputs.registry-username }}/${{ inputs.image-name }}:${{ inputs.image-tag }}"
+
+            docker push "$IMAGE"
+
+            DIGEST=$(docker image inspect "$IMAGE" \
+              --format='{{index .RepoDigests 0}}')
+
+            echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      ##########################################################
+      # Output Image
+      ##########################################################
+
+      - name: Export Outputs
+
+        id: image
+
+        shell: bash
+
+        run: |
+
+          echo "image=${{ inputs.registry }}/${{ inputs.registry-username }}/${{ inputs.image-name }}:${{ inputs.image-tag }}" >> "$GITHUB_OUTPUT"
+
+      ##########################################################
+      # Summary
+      ##########################################################
+
+      - name: Docker Push Summary
+
+        if: always()
+
+        shell: bash
+
+        run: |
+
+          {
+            echo "## Docker Push Summary"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Registry | ${{ inputs.registry }} |"
+            echo "| Repository | ${{ inputs.registry-username }}/${{ inputs.image-name }} |"
+            echo "| Tag | ${{ inputs.image-tag }} |"
+            echo "| Artifact | ${{ inputs.artifact-name }} |"
+            echo "| Image | ${{ inputs.registry }}/${{ inputs.registry-username }}/${{ inputs.image-name }}:${{ inputs.image-tag }} |"
+            echo "| Digest | ${{ steps.push.outputs.digest }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

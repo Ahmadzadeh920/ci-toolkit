@@ -1,0 +1,195 @@
+name: Reusable Repository Sync
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      source-branch:
+        description: Source branch
+        required: false
+        type: string
+        default: main
+
+      target-branch:
+        description: Target branch
+        required: true
+        type: string
+
+      target-repository:
+        description: owner/repository
+        required: true
+        type: string
+
+      sync-tags:
+        description: Synchronize git tags
+        required: false
+        type: boolean
+        default: false
+
+      force-push:
+        description: Force push target branch
+        required: false
+        type: boolean
+        default: false
+
+      fetch-depth:
+        description: Git checkout depth
+        required: false
+        type: number
+        default: 0
+
+      commit-message:
+        description: Commit message
+        required: false
+        type: string
+        default: "Repository synchronization"
+
+      timeout-minutes:
+        description: Workflow timeout
+        required: false
+        type: number
+        default: 30
+
+    secrets:
+
+      target-token:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  sync:
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+
+      ##########################################################
+      # Checkout
+      ##########################################################
+
+      - uses: actions/checkout@v4
+
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+          persist-credentials: false
+
+        
+
+      ##########################################################
+      # Configure Git
+      ##########################################################
+
+      - name: Configure Git
+
+        run: |
+
+          git config --global user.name "github-actions"
+
+          git config --global user.email "github-actions@users.noreply.github.com"
+
+      ##########################################################
+      # Add Remote
+      ##########################################################
+
+      - name: Add Target Remote
+
+        run: |
+
+          git remote add target \
+          https://x-access-token:${{ secrets.target-token }}@github.com/${{ inputs.target-repository }}.git
+
+      ##########################################################
+      # Fetch Target
+      ##########################################################
+
+      - name: Fetch
+
+        run: |
+
+          git fetch origin "${{ inputs.source-branch }}"
+
+          git fetch target
+      ##########################################################
+      # Debug Secret
+      ##########################################################
+
+      - name: Debug Secret
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::target-token is EMPTY — secret not passed correctly"
+          else
+            echo "target-token is set, length: ${#TOKEN}"
+            echo "First 4 chars: ${TOKEN:0:4}"
+          fi
+        env:
+          TOKEN: ${{ secrets.target-token }}
+
+      ##########################################################
+      # Push Branch
+      ##########################################################
+
+      - name: Push Branch
+
+        run: |
+
+          SOURCE_REF="refs/remotes/origin/${{ inputs.source-branch }}"
+          TARGET_REF="refs/heads/${{ inputs.target-branch }}"
+
+          echo "Source: $SOURCE_REF"
+          echo "Target: $TARGET_REF"
+
+          if [ "${{ inputs.force-push }}" = "true" ]; then
+
+            git push target "$SOURCE_REF:$TARGET_REF" --force
+
+          else
+
+            git push target "$SOURCE_REF:$TARGET_REF"
+
+          fi
+
+      ##########################################################
+      # Push Tags
+      ##########################################################
+
+      - name: Push Tags
+
+        if: inputs.sync-tags
+
+        run: |
+
+          git push target --tags
+
+      ##########################################################
+      # Summary
+      ##########################################################
+
+      - name: Summary
+
+        if: always()
+
+        run: |
+
+          {
+            echo "## Repository Synchronization"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Source Branch | ${{ inputs.source-branch }} |"
+            echo "| Target Branch | ${{ inputs.target-branch }} |"
+            echo "| Target Repository | ${{ inputs.target-repository }} |"
+            echo "| Tags | ${{ inputs.sync-tags }} |"
+            echo "| Force Push | ${{ inputs.force-push }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

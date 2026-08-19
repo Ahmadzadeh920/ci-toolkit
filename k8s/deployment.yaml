@@ -1,0 +1,40 @@
+# Minimal example consumed by reusable-deploy-kubernetes.yml
+#
+# Generic placeholder values (namespace, app name, image) — replace with
+# your own. The workflow substitutes `image-repository` and `image-tag`
+# inputs into a manifest like this before applying it.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: my-namespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: my-app
+          image: REGISTRY/IMAGE:TAG
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+  namespace: my-namespace
+spec:
+  selector:
+    app: my-app
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

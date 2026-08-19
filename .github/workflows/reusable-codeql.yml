@@ -1,0 +1,143 @@
+name: Reusable CodeQL Analysis
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: GitHub runner
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      languages:
+        description: >
+          Comma-separated CodeQL languages.
+          Example: python
+          Example: javascript-typescript
+          Example: python,javascript-typescript
+        required: true
+        type: string
+
+      build-mode:
+        description: autobuild | manual | none
+        required: false
+        type: string
+        default: autobuild
+
+      build-command:
+        description: Command used when build-mode=manual
+        required: false
+        type: string
+        default: ""
+
+      queries:
+        description: Additional CodeQL query packs
+        required: false
+        type: string
+        default: ""
+
+      category:
+        description: Category shown in GitHub Security
+        required: false
+        type: string
+        default: "/language"
+
+      timeout-minutes:
+        required: false
+        type: number
+        default: 60
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+
+  codeql:
+
+    name: CodeQL
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+
+      ##########################################################
+      # Checkout
+      ##########################################################
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      ##########################################################
+      # Initialize CodeQL
+      ##########################################################
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+
+        with:
+          languages: ${{ inputs.languages }}
+          queries: ${{ inputs.queries }}
+
+      ##########################################################
+      # Autobuild
+      ##########################################################
+
+      - name: Autobuild
+        if: inputs.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@v3
+
+      ##########################################################
+      # Manual Build
+      ##########################################################
+
+      - name: Manual Build
+        if: inputs.build-mode == 'manual'
+        shell: bash
+        run: |
+          echo "Running manual build..."
+          ${{ inputs.build-command }}
+
+      ##########################################################
+      # No Build
+      ##########################################################
+
+      - name: Skip Build
+        if: inputs.build-mode == 'none'
+        run: echo "No build required."
+
+      ##########################################################
+      # Analyze
+      ##########################################################
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+        with:
+          category: ${{ inputs.category }}
+
+      ##########################################################
+      # Summary
+      ##########################################################
+
+      - name: Job Summary
+        if: always()
+
+        shell: bash
+
+        run: |
+          {
+            echo "## CodeQL Analysis"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Runner | ${{ inputs.runner }} |"
+            echo "| Languages | ${{ inputs.languages }} |"
+            echo "| Build Mode | ${{ inputs.build-mode }} |"
+            echo "| Queries | ${{ inputs.queries }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

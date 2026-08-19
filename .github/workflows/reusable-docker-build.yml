@@ -1,0 +1,272 @@
+name: Reusable Docker Build
+
+on:
+  workflow_call:
+
+    inputs:
+
+      ##########################################################
+      # Runner
+      ##########################################################
+
+      runner:
+        description: GitHub runner
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      ##########################################################
+      # Build Configuration
+      ##########################################################
+
+      context:
+        description: Docker build context
+        required: false
+        type: string
+        default: .
+
+      dockerfile:
+        description: Dockerfile path
+        required: false
+        type: string
+        default: Dockerfile
+
+      image-name:
+        description: Local Docker image name
+        required: true
+        type: string
+
+      image-tag:
+        description: Docker image tag
+        required: false
+        type: string
+        default: latest
+
+      platforms:
+        description: Target platform(s)
+        required: false
+        type: string
+        default: linux/amd64
+
+      ##########################################################
+      # Build Options
+      ##########################################################
+
+      load:
+        description: Load image into local Docker daemon
+        required: false
+        type: boolean
+        default: true
+
+      no-cache:
+        description: Disable Docker cache
+        required: false
+        type: boolean
+        default: false
+
+      build-args:
+        description: Multiline Docker build arguments
+        required: false
+        type: string
+        default: ""
+
+      cache:
+        description: Enable GitHub Actions cache
+        required: false
+        type: boolean
+        default: true
+
+      ##########################################################
+      # Artifact
+      ##########################################################
+
+      save-artifact:
+        description: Save image as tar artifact
+        required: false
+        type: boolean
+        default: true
+
+      artifact-name:
+        description: Artifact name
+        required: false
+        type: string
+        default: docker-image
+
+      ##########################################################
+      # Job
+      ##########################################################
+
+      timeout-minutes:
+        description: Job timeout
+        required: false
+        type: number
+        default: 30
+
+    outputs:
+
+      image-name:
+        description: Docker image name
+        value: ${{ jobs.build.outputs.image-name }}
+
+      image-tag:
+        description: Docker image tag
+        value: ${{ jobs.build.outputs.image-tag }}
+
+      image:
+        description: Full local image
+        value: ${{ jobs.build.outputs.image }}
+
+      artifact-name:
+        description: Docker artifact
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+
+  build:
+
+    name: Docker Build
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    outputs:
+
+      image-name: ${{ inputs.image-name }}
+
+      image-tag: ${{ inputs.image-tag }}
+
+      image: ${{ inputs.image-name }}:${{ inputs.image-tag }}
+
+      artifact-name: ${{ inputs.artifact-name }}
+
+    steps:
+
+      ##########################################################
+      # Checkout
+      ##########################################################
+
+      - name: Checkout source
+
+        uses: actions/checkout@v4
+
+      ##########################################################
+      # Setup QEMU
+      ##########################################################
+
+      - name: Set up QEMU
+
+        uses: docker/setup-qemu-action@v3
+
+      ##########################################################
+      # Setup Buildx
+      ##########################################################
+
+      - name: Set up Buildx
+
+        uses: docker/setup-buildx-action@v3
+
+      ##########################################################
+      # Build Image
+      ##########################################################
+
+      - name: Build Docker Image
+
+        uses: docker/build-push-action@v6
+
+        with:
+
+          context: ${{ inputs.context }}
+
+          file: ${{ inputs.dockerfile }}
+
+          platforms: ${{ inputs.platforms }}
+
+          push: false
+
+          load: ${{ inputs.load }}
+
+          no-cache: ${{ inputs.no-cache }}
+
+          build-args: ${{ inputs.build-args }}
+
+          tags: ${{ inputs.image-name }}:${{ inputs.image-tag }}
+
+          cache-from: ${{ inputs.cache && 'type=gha' || '' }}
+
+          cache-to: ${{ inputs.cache && 'type=gha,mode=max' || '' }}
+
+      ##########################################################
+      # Verify Image
+      ##########################################################
+
+      - name: Verify Docker Image
+
+        run: |
+
+          docker image inspect \
+          ${{ inputs.image-name }}:${{ inputs.image-tag }}
+
+      ##########################################################
+      # Save Image
+      ##########################################################
+
+      - name: Export Docker Image
+
+        if: inputs.save-artifact
+
+        run: |
+
+          docker save \
+          ${{ inputs.image-name }}:${{ inputs.image-tag }} \
+          -o image.tar
+
+      ##########################################################
+      # Upload Artifact
+      ##########################################################
+
+      - name: Upload Docker Artifact
+
+        if: inputs.save-artifact
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: ${{ inputs.artifact-name }}
+
+          path: image.tar
+
+          retention-days: 7
+
+          if-no-files-found: error
+
+      ##########################################################
+      # Build Summary
+      ##########################################################
+
+      - name: Docker Summary
+
+        if: always()
+
+        shell: bash
+
+        run: |
+
+          {
+            echo "## Docker Build Summary"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Runner | ${{ inputs.runner }} |"
+            echo "| Image | ${{ inputs.image-name }} |"
+            echo "| Tag | ${{ inputs.image-tag }} |"
+            echo "| Context | ${{ inputs.context }} |"
+            echo "| Dockerfile | ${{ inputs.dockerfile }} |"
+            echo "| Platforms | ${{ inputs.platforms }} |"
+            echo "| Cache | ${{ inputs.cache }} |"
+            echo "| Artifact | ${{ inputs.artifact-name }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

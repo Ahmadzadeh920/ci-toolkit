@@ -1,0 +1,14 @@
+# Minimal example consumed by reusable-deploy-docker-compose.yml
+#
+# This is a generic shape, not a real application. Replace `app` with your
+# service(s). The workflow's `compose-service` input (optional) targets a
+# single service within this file if you don't want to redeploy everything.
+
+services:
+  app:
+    image: ${IMAGE}:${IMAGE_TAG}
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production

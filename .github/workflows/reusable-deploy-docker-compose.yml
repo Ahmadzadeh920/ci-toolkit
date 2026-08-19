@@ -1,0 +1,414 @@
+name: Reusable Deploy Docker Compose
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: "GitHub Actions runner"
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      environment:
+        description: "Deployment environment"
+        required: true
+        type: string
+
+      compose-file:
+        description: "Docker Compose file"
+        required: false
+        type: string
+        default: docker-compose.yml
+
+      image:
+        description: "Container image repository"
+        required: true
+        type: string
+
+      image-tag:
+        description: "Container image tag"
+        required: true
+        type: string
+        default: latest
+
+      remote-directory:
+        description: "Remote deployment directory"
+        required: false
+        type: string
+        default: "/opt/app"
+
+      compose-service:
+        description: "Optional Docker Compose service"
+        required: false
+        type: string
+        default: ""
+
+      timeout-minutes:
+        description: "Deployment timeout"
+        required: false
+        type: number
+        default: 30
+
+    secrets:
+
+      ssh-host:
+        description: "Remote Docker server hostname"
+        required: true
+
+      ssh-user:
+        description: "SSH username"
+        required: true
+
+      ssh-private-key:
+        description: "SSH private key"
+        required: true
+
+      DEPLOY_KEY:
+        description: "deploy key"
+        required: true
+      
+
+      ghcr-username:          
+        required: true
+      ghcr-token:             
+        required: true
+
+
+jobs:
+
+  ######################################################################
+  # Deploy
+  ######################################################################
+
+  deploy:
+
+    name: Deploy Docker Compose
+
+    runs-on: ${{ inputs.runner }}
+
+    environment: ${{ inputs.environment }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+
+      ####################################################################
+      # Checkout
+      ####################################################################
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+
+      ####################################################################
+      # Verify Compose file
+      ####################################################################
+
+      - name: Verify Compose file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking Compose file..."
+
+          if [ ! -f "${{ inputs.compose-file }}" ]; then
+
+            echo "::error::Compose file '${{ inputs.compose-file }}' does not exist."
+
+            exit 1
+
+          fi
+
+          echo "Compose file found:"
+          echo "${{ inputs.compose-file }}"
+
+
+      ####################################################################
+      # Configure SSH
+      ####################################################################
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ssh-private-key }}
+      ####################################################################
+      # Add host to known_hosts
+      ####################################################################
+
+      - name: Add host to known_hosts
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.ssh-host }}" >> ~/.ssh/known_hosts
+
+      ####################################################################
+      # Test SSH connection
+      ####################################################################
+
+      - name: Test SSH connection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Testing SSH connection..."
+
+          ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "echo 'SSH connection successful'"
+
+
+      ####################################################################
+      # Prepare remote directory
+      ####################################################################
+
+      - name: Prepare remote directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Preparing remote deployment directory..."
+
+          ssh \
+            -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "mkdir -p '${{ inputs.remote-directory }}'"
+
+
+
+
+      
+
+      ####################################################################
+      # Copy Compose file
+      ####################################################################
+
+      
+      - name: Sync deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Syncing deployment files to remote server..."
+
+          rsync -az --delete \
+            -e "ssh -o BatchMode=yes" \
+            "${{ inputs.compose-file }}" \
+            services/api-gateway \
+            docker \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}:${{ inputs.remote-directory }}/"
+
+          ssh -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "mkdir -p '${{ inputs.remote-directory }}/logs/traefik'"
+
+          ssh -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "cp '${{ inputs.remote-directory }}/$(basename ${{ inputs.compose-file }})' '${{ inputs.remote-directory }}/docker-compose.yml'"
+
+
+      ####################################################################
+      # Login to GHCR on remote host
+      ####################################################################
+
+      - name: Login to GHCR (remote)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if ssh -o BatchMode=yes \
+              "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+              "echo '${{ secrets.ghcr-token }}' | docker login ghcr.io -u '${{ secrets.ghcr-username }}' --password-stdin"; then
+              echo "Login succeeded on attempt $i"
+              exit 0
+            fi
+            echo "Login attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::GHCR login failed after 6 attempts"
+          exit 1
+      ####################################################################
+      # Deploy Docker Compose
+      ####################################################################
+
+      - name: Deploy Docker Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ inputs.image }}"
+          TAG="${{ inputs.image-tag }}"
+
+          echo "=========================================="
+          echo "Docker Compose Deployment"
+          echo "=========================================="
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Image:       ${IMAGE}:${TAG}"
+          echo "Remote host: ${{ secrets.ssh-host }}"
+          echo "Directory:   ${{ inputs.remote-directory }}"
+          echo "=========================================="
+
+          ssh \
+            -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "cd '${{ inputs.remote-directory }}' && \
+             export IMAGE='${IMAGE}' && \
+             export TAG='${TAG}' && \
+             docker compose config"
+
+
+      ####################################################################
+      # Pull images
+      ####################################################################
+
+      - name: Pull Docker images
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for i in 1 2 3 4 5 6 7 8; do
+            if ssh -o BatchMode=yes \
+              "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+              "cd '${{ inputs.remote-directory }}' && \
+               export IMAGE='${{ inputs.image }}' && \
+               export TAG='${{ inputs.image-tag }}' && \
+               docker compose pull"; then
+              echo "Pull succeeded on attempt $i"
+              exit 0
+            fi
+            echo "Pull attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::docker compose pull failed after 8 attempts"
+          exit 1
+
+      ####################################################################
+      # Stop existing containers before redeploy
+      ####################################################################
+
+      - name: Stop existing containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "cd '${{ inputs.remote-directory }}' && \
+             export IMAGE='${{ inputs.image }}' && \
+             export TAG='${{ inputs.image-tag }}' && \
+             docker compose down --remove-orphans || true"
+
+          ssh -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "docker rm -f postgres sonarqube-db keycloak pgadmin 2>/dev/null || true"
+
+      ####################################################################
+      # Deploy containers
+      ####################################################################
+
+      - name: Start Docker Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${{ inputs.compose-service }}" ]; then
+
+            echo "Starting service: ${{ inputs.compose-service }}"
+
+            ssh \
+              -o BatchMode=yes \
+              "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+              "cd '${{ inputs.remote-directory }}' && \
+               export IMAGE='${{ inputs.image }}' && \
+               export TAG='${{ inputs.image-tag }}' && \
+               docker compose up -d '${{ inputs.compose-service }}'"
+
+          else
+
+            echo "Starting all Compose services..."
+
+            ssh \
+              -o BatchMode=yes \
+              "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+              "cd '${{ inputs.remote-directory }}' && \
+               export IMAGE='${{ inputs.image }}' && \
+               export TAG='${{ inputs.image-tag }}' && \
+               docker compose up -d"
+
+          fi
+
+
+      ####################################################################
+      # Verify Docker Compose
+      ####################################################################
+
+      - name: Verify Docker Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking running containers..."
+
+          ssh \
+            -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "cd '${{ inputs.remote-directory }}' && \
+             docker compose ps"
+
+
+      ####################################################################
+      # Deployment summary
+      ####################################################################
+
+      - name: Deployment Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Docker Compose Deployment"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Environment | ${{ inputs.environment }} |"
+            echo "| Compose File | ${{ inputs.compose-file }} |"
+            echo "| Image | ${{ inputs.image }}:${{ inputs.image-tag }} |"
+            echo "| Remote Host | ${{ secrets.ssh-host }} |"
+            echo "| Remote Directory | ${{ inputs.remote-directory }} |"
+            echo "| Service | ${{ inputs.compose-service }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+      ####################################################################
+      # Diagnostics
+      ####################################################################
+
+      - name: Deployment diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "=========================================="
+          echo "Docker Compose Diagnostics"
+          echo "=========================================="
+
+          echo
+          echo "===== Docker Compose Status ====="
+
+          ssh \
+            -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "cd '${{ inputs.remote-directory }}' && \
+             docker compose ps" \
+            || true
+
+          echo
+          echo "===== Docker Compose Logs ====="
+
+          ssh \
+            -o BatchMode=yes \
+            "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}" \
+            "cd '${{ inputs.remote-directory }}' && \
+             docker compose logs --tail=100" \
+            || true

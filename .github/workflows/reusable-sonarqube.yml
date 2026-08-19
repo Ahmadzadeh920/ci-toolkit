@@ -1,0 +1,190 @@
+name: Reusable SonarQube Scan
+
+on:
+  workflow_call:
+
+    inputs:
+
+      runner:
+        description: GitHub runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+
+      project-base-dir:
+        description: Sonar project base directory
+        required: false
+        type: string
+        default: .
+
+      artifact-name:
+        description: Test artifact name to download
+        required: false
+        type: string
+        default: ""
+
+      download-artifact:
+        description: Download test artifacts before scan
+        required: false
+        type: boolean
+        default: false
+
+      scanner-args:
+        description: Additional Sonar scanner arguments
+        required: false
+        type: string
+        default: ""
+
+      quality-gate:
+        description: Wait for Sonar Quality Gate
+        required: false
+        type: boolean
+        default: true
+
+      quality-gate-timeout:
+        description: Quality Gate timeout (minutes)
+        required: false
+        type: number
+        default: 10
+
+      fetch-depth:
+        description: Git checkout depth
+        required: false
+        type: number
+        default: 0
+
+      timeout-minutes:
+        description: Workflow timeout
+        required: false
+        type: number
+        default: 30
+
+    secrets:
+
+      sonar-token:
+        required: true
+
+      sonar-host-url:
+        required: true
+      
+      DEPLOY_KEY:
+        description: "deploy key"
+        required: true
+
+    outputs:
+
+      quality-gate:
+        description: Quality Gate enabled
+        value: ${{ jobs.sonarqube.outputs.quality-gate }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+
+  sonarqube:
+
+    name: SonarQube Analysis
+
+    runs-on: ${{ inputs.runner }}
+
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    outputs:
+      quality-gate: ${{ inputs.quality-gate }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+
+      ###########################################################
+      # Checkout
+      ###########################################################
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+     
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+      ###########################################################
+      # Download Test Reports
+      ###########################################################
+
+      - name: Download Test Artifacts
+        if: inputs.download-artifact && inputs.artifact-name != ''
+        uses: actions/download-artifact@v4
+
+        with:
+          name: ${{ inputs.artifact-name }}
+
+      ###########################################################
+      # check SonarQube connectivity
+      ###########################################################
+      - name: Check SonarQube connectivity
+        env:
+          SONAR_HOST_URL: ${{ secrets.sonar-host-url }}
+        run: |
+          echo "Runner: $(hostname)"
+          echo "SonarQube URL: $SONAR_HOST_URL"
+
+          echo "Testing SonarQube..."
+          curl --fail --show-error \
+            "$SONAR_HOST_URL/api/system/status"
+
+      ###########################################################
+      # SonarQube Scan
+      ###########################################################
+
+      - name: Run SonarQube Scan
+
+        uses: sonarsource/sonarqube-scan-action@master
+
+        env:
+          SONAR_TOKEN: ${{ secrets.sonar-token }}
+          SONAR_HOST_URL: ${{ secrets.sonar-host-url }}
+
+        with:
+          projectBaseDir: ${{ inputs.project-base-dir }}
+          args: ${{ inputs.scanner-args }}
+
+      ###########################################################
+      # Quality Gate
+      ###########################################################
+
+      - name: Check Quality Gate
+
+        if: inputs.quality-gate
+
+        timeout-minutes: ${{ inputs.quality-gate-timeout }}
+
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
+
+        env:
+          SONAR_TOKEN: ${{ secrets.sonar-token }}
+
+      ###########################################################
+      # Summary
+      ###########################################################
+
+      - name: Workflow Summary
+
+        if: always()
+
+        run: |
+
+          {
+            echo "## SonarQube Analysis"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Runner | ${{ inputs.runner }} |"
+            echo "| Base Directory | ${{ inputs.project-base-dir }} |"
+            echo "| Download Artifact | ${{ inputs.download-artifact }} |"
+            echo "| Artifact | ${{ inputs.artifact-name }} |"
+            echo "| Quality Gate | ${{ inputs.quality-gate }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
