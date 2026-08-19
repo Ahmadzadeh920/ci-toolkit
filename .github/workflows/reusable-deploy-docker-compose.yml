@@ -50,6 +50,12 @@ on:
         required: false
         type: number
         default: 30
+      
+      sync-paths:
+        description: "Files/directories to synchronize to remote server"
+        required: false
+        type: string
+        default: ""
 
     secrets:
 
@@ -198,7 +204,7 @@ jobs:
           rsync -az --delete \
             -e "ssh -o BatchMode=yes" \
             "${{ inputs.compose-file }}" \
-            services/api-gateway \
+            "${{ inputs.sync-paths}}" \
             docker \
             "${{ secrets.ssh-user }}@${{ secrets.ssh-host }}:${{ inputs.remote-directory }}/"
 

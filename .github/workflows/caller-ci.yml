@@ -58,10 +58,12 @@ jobs:
     uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml@v1
     with:
       environment: production
-      compose-file: examples/docker-compose/docker-compose.yml
+      compose-file: docker-compose/docker-compose.yml # this is example of docker-compose
+
       image: ghcr.io/${{ github.repository_owner }}/my-app
       image-tag: ${{ github.sha }}
       remote-directory: /opt/my-app
+      sync-apth: Files/directories to synchronize to remote server
     secrets:
       ssh-host: ${{ secrets.SSH_HOST }}
       ssh-user: ${{ secrets.SSH_USER }}
