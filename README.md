@@ -287,7 +287,7 @@ The complete workflow contract, including inputs, secrets, permissions, and outp
 4. Create only the required secrets.
 5. Configure repository/environment variables where necessary.
 6. Configure required GitHub Actions permissions.
-7. Select one deployment strategy if deployment is required.
+7. Select one deployment target if deployment is required.
 8. Test the pipeline in a non-production environment.
 9. Promote the tested version to production.
 
@@ -295,14 +295,14 @@ The migration checklist documents this process.
 
 ---
 
-# Deployment strategies
+# Deployment Target
 
-A consuming repository has **three deployment strategy options**:
+A consuming repository has **three deployment target options**:
 
 ```text
                     Application
                          |
-                 Choose ONE strategy
+                 Choose ONE target
                          |
           +--------------+--------------+
           |              |              |
@@ -779,7 +779,7 @@ The migration process is:
 5. Create only the required secrets.
 6. Configure non-sensitive variables.
 7. Configure GitHub Environments where required.
-8. Select **exactly one deployment strategy**.
+8. Select **exactly one deployment target**.
 9. Keep the application's own manifest, Helm chart, or Compose file in the consuming repository.
 10. Configure the correct self-hosted runner where required.
 11. Configure the required GitHub Actions permissions.

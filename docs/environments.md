@@ -167,11 +167,11 @@ This helps prevent an automatically triggered workflow from immediately deployin
 
 ---
 
-# Deployment strategy and environments
+# Deployment target and environments
 
 Environments are independent of the deployment mechanism.
 
-A repository can use environments with any of the three supported deployment strategies:
+A repository can use environments with any of the three supported deployment targets:
 
 ### Docker Compose
 
