@@ -1,0 +1,83 @@
+name: Contract Diff Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+    paths:
+      - '.github/workflows/reusable-deploy-docker-compose.yml'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  contract-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need tag history to find the last release
+
+      - name: Find last released tag
+        id: last_tag
+        run: |
+          LAST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$LAST_TAG" ]; then
+            echo "No prior release tag found -- nothing to diff against (first release)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Comparing against $LAST_TAG"
+            echo "tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.last_tag.outputs.skip == 'false'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.last_tag.outputs.skip == 'false'
+        run: pip install pyyaml
+
+      - name: Extract old workflow_call contract
+        if: steps.last_tag.outputs.skip == 'false'
+        run: |
+          git show ${{ steps.last_tag.outputs.tag }}:.github/workflows/reusable-deploy-docker-compose.yml \
+            > old_workflow.yml
+
+      - name: Diff workflow_call contract
+        id: diff
+        if: steps.last_tag.outputs.skip == 'false'
+        run: |
+          python .github/scripts/contract_diff.py \
+            --old old_workflow.yml \
+            --new .github/workflows/reusable-deploy-docker-compose.yml \
+            | tee contract_diff_report.txt
+
+          if grep -qE "^(REMOVED|RENAMED)" contract_diff_report.txt; then
+            echo "breaking=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "breaking=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce breaking-change acknowledgement
+        if: steps.diff.outputs.breaking == 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          echo "PR title:  $PR_TITLE"
+          echo "PR labels: $PR_LABELS"
+
+          if echo "$PR_LABELS" | grep -qi 'breaking-change'; then
+            echo "Acknowledged via 'breaking-change' label. Passing."
+          elif echo "$PR_TITLE" | grep -qiE '(^[a-z]+(\([^)]*\))?!:|breaking[ -]?change)'; then
+            echo "Acknowledged via PR title (conventional-commit '!' or 'breaking change'). Passing."
+          else
+            echo "::error::This PR removes or renames a workflow_call input, secret, or output vs. $(cat <<< "${{ steps.last_tag.outputs.tag }}"). That's a breaking change for existing callers. Either restore backward compatibility, or add the 'breaking-change' label (or a conventional-commit '!' in the title) and plan a major version bump."
+            exit 1
+          fi
