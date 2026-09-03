@@ -5,20 +5,48 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled, edited]
     paths:
-      - '.github/workflows/reusable-deploy-docker-compose.yml'
+      - '.github/workflows/**.yml'
+      - '.github/scripts/contract_diff.py'
 
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
-  contract-diff:
+  # Finds every reusable workflow (any file under .github/workflows/ that
+  # declares `workflow_call:`) so we never have to hand-maintain a list.
+  # Adding a 12th reusable workflow next month requires editing zero CI files.
+  discover:
     runs-on: ubuntu-latest
+    outputs:
+      files: ${{ steps.find.outputs.files }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Find reusable workflows
+        id: find
+        run: |
+          FILES=$(grep -l 'workflow_call:' .github/workflows/*.yml 2>/dev/null \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          FILES="${FILES:-[]}"
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Discovered reusable workflows: $FILES"
+
+  # One parameterized job, run once per discovered file via matrix.
+  contract-diff:
+    needs: discover
+    if: needs.discover.outputs.files != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # a break in file #3 shouldn't hide results for files #4-11
+      matrix:
+        file: ${{ fromJson(needs.discover.outputs.files) }}
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0   # need tag history to find the last release
+          fetch-depth: 0
 
       - name: Find last released tag
         id: last_tag
@@ -28,7 +56,7 @@ jobs:
             echo "No prior release tag found -- nothing to diff against (first release)."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Comparing against $LAST_TAG"
+            echo "Comparing ${{ matrix.file }} against $LAST_TAG"
             echo "tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -46,8 +74,11 @@ jobs:
       - name: Extract old workflow_call contract
         if: steps.last_tag.outputs.skip == 'false'
         run: |
-          git show ${{ steps.last_tag.outputs.tag }}:.github/workflows/reusable-deploy-docker-compose.yml \
-            > old_workflow.yml
+          # If the file didn't exist yet at the last release tag, this is a
+          # brand-new reusable workflow -- treat "old" as an empty contract
+          # so nothing looks "removed", only "added" (non-breaking).
+          git show ${{ steps.last_tag.outputs.tag }}:${{ matrix.file }} > old_workflow.yml 2>/dev/null \
+            || echo "on: {}" > old_workflow.yml
 
       - name: Diff workflow_call contract
         id: diff
@@ -55,7 +86,7 @@ jobs:
         run: |
           python .github/scripts/contract_diff.py \
             --old old_workflow.yml \
-            --new .github/workflows/reusable-deploy-docker-compose.yml \
+            --new "${{ matrix.file }}" \
             | tee contract_diff_report.txt
 
           if grep -qE "^(REMOVED|RENAMED)" contract_diff_report.txt; then
@@ -70,6 +101,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
+          echo "File:      ${{ matrix.file }}"
           echo "PR title:  $PR_TITLE"
           echo "PR labels: $PR_LABELS"
 
@@ -78,6 +110,23 @@ jobs:
           elif echo "$PR_TITLE" | grep -qiE '(^[a-z]+(\([^)]*\))?!:|breaking[ -]?change)'; then
             echo "Acknowledged via PR title (conventional-commit '!' or 'breaking change'). Passing."
           else
-            echo "::error::This PR removes or renames a workflow_call input, secret, or output vs. $(cat <<< "${{ steps.last_tag.outputs.tag }}"). That's a breaking change for existing callers. Either restore backward compatibility, or add the 'breaking-change' label (or a conventional-commit '!' in the title) and plan a major version bump."
+            echo "::error::${{ matrix.file }} removes or renames a workflow_call input, secret, or output vs. ${{ steps.last_tag.outputs.tag }}. That's a breaking change for existing callers. Either restore backward compatibility, or add the 'breaking-change' label (or a conventional-commit '!' in the title) and plan a major version bump."
             exit 1
           fi
+
+  # Single required check for branch protection, regardless of how many
+  # reusable workflows exist. Point "Require status checks" at THIS job only.
+  gate:
+    needs: [discover, contract-diff]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate matrix results
+        run: |
+          RESULT="${{ needs.contract-diff.result }}"
+          echo "contract-diff result: $RESULT"
+          if [ "$RESULT" == "failure" ]; then
+            echo "::error::One or more reusable workflow contracts broke compatibility without acknowledgement."
+            exit 1
+          fi
+          echo "All reusable workflow contracts OK (or none changed in this PR)."
