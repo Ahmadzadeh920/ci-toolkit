@@ -871,7 +871,7 @@ The key principles are:
 - **Production workflows should use release tags rather than `main`.**
 - **GitHub Actions permissions should follow least privilege.**
 - **Kubernetes/k3s deployments use a runner with Kubernetes access already configured.**
-- **A repository should select exactly one deployment strategy:**
+- **A repository should select exactly one deployment target:**
   - **Docker Compose**
   - **Kubernetes / k3s**
   - **Helm**
