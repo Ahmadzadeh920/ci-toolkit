@@ -1,0 +1,194 @@
+name: Reusable Build (Cloud Native Buildpacks)
+
+# Implements the shared build interface documented in
+# docs/build-interface.md. This workflow is the Buildpacks-based
+# alternative to reusable-docker-build.yml: it never reads a Dockerfile,
+# it derives the image directly from the source tree using a builder
+# image, but it exposes the exact same inputs/outputs shape so that
+# reusable-docker-push.yml, reusable-trivy.yml, and the reusable-deploy-*.yml
+# workflows can consume its result without knowing it came from `pack`
+# instead of `docker build`.
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label the build job executes on.'
+        type: string
+        required: false
+        default: 'ubuntu-latest'
+      working-directory:
+        description: 'Path to the application source to build.'
+        type: string
+        required: false
+        default: '.'
+      builder-image:
+        description: 'Cloud Native Buildpacks builder image, e.g. paketobuildpacks/builder-jammy-base.'
+        type: string
+        required: false
+        default: 'paketobuildpacks/builder-jammy-base:latest'
+      buildpacks:
+        description: >
+          Optional comma-separated list of specific buildpack references to
+          force (e.g. paketo-buildpacks/python). Leave empty to let the
+          builder auto-detect.
+        type: string
+        required: false
+        default: ''
+      env-vars:
+        description: >
+          Optional newline-separated KEY=VALUE pairs passed to the build
+          via `pack build --env`.
+        type: string
+        required: false
+        default: ''
+      registry:
+        description: 'Registry host to authenticate against when push is true.'
+        type: string
+        required: false
+        default: ''
+      registry-username:
+        description: 'Registry username, paired with the registry-password secret.'
+        type: string
+        required: false
+        default: ''
+      image-name:
+        description: 'Image name/repository, without tag, e.g. ghcr.io/org/app.'
+        type: string
+        required: true
+      image-tag:
+        description: 'Tag applied to the built image.'
+        type: string
+        required: true
+      push:
+        description: 'Push the built image to the registry.'
+        type: boolean
+        required: false
+        default: false
+      save-artifact:
+        description: 'Save the built image as a workflow artifact (docker save + upload-artifact).'
+        type: boolean
+        required: false
+        default: false
+      artifact-name:
+        description: 'Name to upload the saved image artifact under. Required if save-artifact is true.'
+        type: string
+        required: false
+        default: ''
+      timeout-minutes:
+        description: 'Job timeout in minutes.'
+        type: number
+        required: false
+        default: 30
+    secrets:
+      registry-password:
+        description: 'Registry password/token, paired with registry-username. Required if push is true.'
+        required: false
+    outputs:
+      image:
+        description: 'Fully qualified image reference (registry/name:tag).'
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: 'Content digest of the pushed image (sha256:...). Empty if push is false.'
+        value: ${{ jobs.build.outputs.digest }}
+      tags:
+        description: 'Tags applied to the image.'
+        value: ${{ jobs.build.outputs.tags }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      image: ${{ steps.set-outputs.outputs.image }}
+      digest: ${{ steps.set-outputs.outputs.digest }}
+      tags: ${{ steps.set-outputs.outputs.tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up pack CLI
+        uses: buildpacks/github-actions/setup-pack@v5.9.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: Log in to registry
+        if: ${{ inputs.push == true }}
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ inputs.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      - name: Build image with pack
+        id: pack-build
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+
+          IMAGE_REF="${{ inputs.image-name }}:${{ inputs.image-tag }}"
+
+          ARGS=(build "$IMAGE_REF" --builder "${{ inputs.builder-image }}")
+
+          if [ -n "${{ inputs.buildpacks }}" ]; then
+            IFS=',' read -ra BP_LIST <<< "${{ inputs.buildpacks }}"
+            for bp in "${BP_LIST[@]}"; do
+              ARGS+=(--buildpack "$bp")
+            done
+          fi
+
+          if [ -n "${{ inputs.env-vars }}" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              ARGS+=(--env "$line")
+            done <<< "${{ inputs.env-vars }}"
+          fi
+
+          if [ "${{ inputs.push }}" = "true" ]; then
+            ARGS+=(--publish)
+          fi
+
+          pack "${ARGS[@]}"
+
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve digest
+        id: digest
+        if: ${{ inputs.push == true }}
+        run: |
+          set -euo pipefail
+          DIGEST=$(docker buildx imagetools inspect "${{ steps.pack-build.outputs.image_ref }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Save image as artifact
+        if: ${{ inputs.save-artifact == true }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/build-artifact
+          docker save "${{ steps.pack-build.outputs.image_ref }}" -o /tmp/build-artifact/image.tar
+
+      - name: Upload artifact
+        if: ${{ inputs.save-artifact == true }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: /tmp/build-artifact/image.tar
+          retention-days: 1
+
+      - name: Set contract outputs
+        id: set-outputs
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.push }}" = "true" ]; then
+            echo "image=${{ steps.pack-build.outputs.image_ref }}" >> "$GITHUB_OUTPUT"
+            echo "digest=${{ steps.digest.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=${{ steps.pack-build.outputs.image_ref }}" >> "$GITHUB_OUTPUT"
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tags=${{ inputs.image-tag }}" >> "$GITHUB_OUTPUT"

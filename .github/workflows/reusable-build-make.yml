@@ -1,0 +1,191 @@
+name: Reusable Build (Make / Artifact)
+
+# Implements the build interface documented in docs/build-interface.md for
+# repositories that don't produce a container image at all (a compiled
+# binary, a static site bundle, a jar, etc.), plus an optional path for
+# wrapping the result in a thin runtime image when the caller wants one.
+#
+# Two modes, both satisfying the same output contract:
+#   1. Artifact-only (default): runs the build command, uploads the result
+#      via actions/upload-artifact, sets image/digest to empty strings.
+#   2. wrap-in-image: true — additionally builds a runtime image around the
+#      artifact using a caller-supplied Dockerfile, producing image/digest
+#      exactly like reusable-docker-build.yml would.
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label the build job executes on.'
+        type: string
+        required: false
+        default: 'ubuntu-latest'
+      working-directory:
+        description: 'Directory the build command runs in.'
+        type: string
+        required: false
+        default: '.'
+      build-command:
+        description: 'Shell command that produces the build output, e.g. "make build".'
+        type: string
+        required: false
+        default: 'make build'
+      output-path:
+        description: 'Path (file or directory, relative to working-directory) containing the build result to upload.'
+        type: string
+        required: true
+      artifact-name:
+        description: 'Name to upload the build output under. Required if save-artifact is true.'
+        type: string
+        required: false
+        default: ''
+      save-artifact:
+        description: 'Upload output-path via actions/upload-artifact.'
+        type: boolean
+        required: false
+        default: true
+      wrap-in-image:
+        description: >
+          If true, build a runtime image around output-path using
+          wrapper-dockerfile and populate image/digest/tags like an
+          image-producing backend would. If false, image and digest are
+          returned as empty strings.
+        type: boolean
+        required: false
+        default: false
+      wrapper-dockerfile:
+        description: 'Dockerfile used to build the runtime image when wrap-in-image is true. Expected to COPY output-path in.'
+        type: string
+        required: false
+        default: 'Dockerfile'
+      registry:
+        description: 'Registry host to authenticate against when push is true.'
+        type: string
+        required: false
+        default: ''
+      registry-username:
+        description: 'Registry username, paired with the registry-password secret.'
+        type: string
+        required: false
+        default: ''
+      image-name:
+        description: 'Image name/repository, without tag. Required if wrap-in-image is true.'
+        type: string
+        required: false
+        default: ''
+      image-tag:
+        description: 'Tag applied to the wrapped image. Required if wrap-in-image is true.'
+        type: string
+        required: false
+        default: ''
+      push:
+        description: 'Push the wrapped image to the registry. Only meaningful if wrap-in-image is true.'
+        type: boolean
+        required: false
+        default: false
+      timeout-minutes:
+        description: 'Job timeout in minutes.'
+        type: number
+        required: false
+        default: 30
+    secrets:
+      registry-password:
+        description: 'Registry password/token. Required if wrap-in-image and push are both true.'
+        required: false
+    outputs:
+      image:
+        description: 'Fully qualified image reference if wrap-in-image is true; empty string otherwise.'
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: 'Content digest if wrap-in-image and push are true; empty string otherwise.'
+        value: ${{ jobs.build.outputs.digest }}
+      tags:
+        description: 'Tags applied to the wrapped image; empty string if wrap-in-image is false.'
+        value: ${{ jobs.build.outputs.tags }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      image: ${{ steps.set-outputs.outputs.image }}
+      digest: ${{ steps.set-outputs.outputs.digest }}
+      tags: ${{ steps.set-outputs.outputs.tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run build command
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.build-command }}
+
+      - name: Verify output exists
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          if [ ! -e "${{ inputs.output-path }}" ]; then
+            echo "::error::output-path '${{ inputs.output-path }}' was not produced by build-command." >&2
+            exit 1
+          fi
+
+      - name: Upload build artifact
+        if: ${{ inputs.save-artifact == true }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.output-path }}
+          retention-days: 1
+
+      # --- Optional wrap-in-image path: same shape as reusable-docker-build.yml ---
+
+      - name: Set up Docker Buildx
+        if: ${{ inputs.wrap-in-image == true }}
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: Log in to registry
+        if: ${{ inputs.wrap-in-image == true && inputs.push == true }}
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ inputs.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      - name: Build wrapper image
+        id: wrap
+        if: ${{ inputs.wrap-in-image == true }}
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          IMAGE_REF="${{ inputs.image-name }}:${{ inputs.image-tag }}"
+          docker buildx build \
+            -f "${{ inputs.wrapper-dockerfile }}" \
+            -t "$IMAGE_REF" \
+            $( [ "${{ inputs.push }}" = "true" ] && echo "--push" || echo "--load" ) \
+            .
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve digest
+        id: digest
+        if: ${{ inputs.wrap-in-image == true && inputs.push == true }}
+        run: |
+          set -euo pipefail
+          DIGEST=$(docker buildx imagetools inspect "${{ steps.wrap.outputs.image_ref }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Set contract outputs
+        id: set-outputs
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.wrap-in-image }}" = "true" ]; then
+            echo "image=${{ steps.wrap.outputs.image_ref }}" >> "$GITHUB_OUTPUT"
+            echo "digest=${{ steps.digest.outputs.digest }}" >> "$GITHUB_OUTPUT"
+            echo "tags=${{ inputs.image-tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=" >> "$GITHUB_OUTPUT"
+            echo "digest=" >> "$GITHUB_OUTPUT"
+            echo "tags=" >> "$GITHUB_OUTPUT"
+          fi
