@@ -9,16 +9,40 @@ precompiled/external artifact supplied by another pipeline).
 
 `ci-toolkit` does not ship a generic `reusable-build.yml` dispatcher with a
 `backend: docker|buildpacks|bazel` switch — the same way it does not ship a
-generic deployment dispatcher (see the "Deployment strategies" section of the
-README). Each build backend is a dedicated `workflow_call` workflow with its
-own explicit, self-contained inputs. What makes them interchangeable is not
-a shared implementation — it's a shared **output shape** that every
-downstream workflow (`reusable-docker-push.yml`, `reusable-trivy.yml`, the
-`reusable-deploy-*.yml` workflows) is written against.
+generic deployment dispatcher (see the "Deployment strategies" section of
+the README). Each build backend is a dedicated `workflow_call` workflow
+with its own explicit, self-contained inputs. What makes them
+interchangeable is not a shared implementation — it's a shared **output
+shape** that `reusable-docker-push.yml` and every other downstream
+workflow is written against.
 
 A consuming repository's pipeline picks exactly one `reusable-build-*.yml`
 matching its toolchain. Everything downstream of that call is written
 against this contract, not against any specific backend.
+
+---
+
+## Scope: build produces a local artifact, it does not push
+
+[#scope](#scope)
+
+`reusable-docker-build.yml` never pushes to a registry — it builds locally
+(`load` into the runner's Docker daemon), optionally `docker save`s the
+result to a tarball, and uploads that tarball as a workflow artifact.
+Registry authentication, tagging for a remote registry, pushing, and
+resolving a real registry digest are the job of `reusable-docker-push.yml`,
+a separate downstream workflow that downloads the artifact by name.
+
+Every `reusable-build-*.yml` workflow follows the same split:
+
+- **Build's job:** produce the artifact (a local image, a binary, a
+  bundle) and optionally hand it off as a named workflow artifact.
+- **Push's job:** consume that artifact by name, authenticate, and publish
+  it. This is out of scope for the build interface itself.
+
+This is why the build contract below has no `push`, `registry`, or
+`registry-password` — those inputs/secrets exist on `reusable-docker-push.yml`,
+not on the build workflows.
 
 ---
 
@@ -41,7 +65,7 @@ Defining the contract explicitly, in one place, means:
   `reusable-trivy.yml`, or any `reusable-deploy-*.yml` workflow.
 - Downstream workflows can be written once, against the contract, instead of
   against `reusable-docker-build.yml` specifically.
-- A reviewer adding a tenth build backend has a checklist to verify against,
+- A reviewer adding a new build backend has a checklist to verify against,
   instead of having to reverse-engineer what "compatible" means from reading
   `reusable-docker-build.yml`'s source.
 
@@ -56,56 +80,53 @@ with these exact names and semantics. It may accept additional
 backend-specific inputs (e.g. `dockerfile`/`context` for Docker,
 `builder-image` for Buildpacks) on top of these.
 
-| Input | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| `runner` | string | no | Runner label the build job executes on. |
-| `image-name` | string | yes, if the backend produces an image | Image name/repository (without tag), e.g. `ghcr.io/org/app`. |
-| `image-tag` | string | yes, if the backend produces an image | Tag to apply to the built image. |
-| `registry` | string | no | Registry host to authenticate against when `push: true`. |
-| `registry-username` | string | no | Registry username, paired with the `registry-password` secret. |
-| `push` | boolean | no (default `false`) | If `true`, the backend must push the resulting image to `registry`. |
-| `save-artifact` | boolean | no (default `false`) | If `true`, the backend must upload its build result (image tarball, binary, directory) via `actions/upload-artifact`. |
-| `artifact-name` | string | yes, if `save-artifact: true` | Name under which the artifact is uploaded, and the name a downstream job (e.g. `reusable-docker-push.yml`) will use to download it. |
+| Input | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `runner` | string | no | `ubuntu-latest` | Runner label the build job executes on. |
+| `image-name` | string | yes, if the backend produces an image | — | Local image name (no registry host required — the registry host is added later, by `reusable-docker-push.yml`). |
+| `image-tag` | string | no | `latest` | Tag applied to the locally built image. |
+| `save-artifact` | boolean | no | `true` | If `true`, upload the build result via `actions/upload-artifact` so a downstream job (typically `reusable-docker-push.yml`) can retrieve it. |
+| `artifact-name` | string | no | backend-specific (e.g. `docker-image`) | Name under which the artifact is uploaded. |
+| `timeout-minutes` | number | no | `30` | Job timeout. |
 
-**Secrets:** any backend that supports `push: true` must accept a
-`registry-password` secret, named identically to `reusable-docker-build.yml`'s.
+There is **no** `push`, `registry`, `registry-username` input and **no**
+`registry-password` secret on any build workflow. Pushing is
+`reusable-docker-push.yml`'s responsibility.
 
 ## Shared outputs
 
 [#shared-outputs](#shared-outputs)
 
-Every `reusable-build-*.yml` workflow must declare exactly these three
+Every `reusable-build-*.yml` workflow must declare exactly these four
 `workflow_call` outputs:
 
 | Output | Meaning |
 | --- | --- |
-| `image` | Fully qualified image reference (`registry/name:tag`) if the backend produced and pushed/loaded an image. **Empty string** if this build produced no image (e.g. a Makefile backend emitting a binary). |
-| `digest` | Content digest of the pushed image (`sha256:...`). **Empty string** if not applicable. |
-| `tags` | Newline- or comma-separated list of tags applied to the image. **Empty string** if not applicable. |
+| `image-name` | The image name that was built. **Empty string** if this backend produced no image. |
+| `image-tag` | The tag that was applied. **Empty string** if this backend produced no image. |
+| `image` | `image-name:image-tag` combined. **Empty string** if this backend produced no image. |
+| `artifact-name` | The name the build result was (or would be) uploaded under — always populated, even if `save-artifact` was `false`, matching `reusable-docker-build.yml`'s existing behavior. |
 
-A backend must never rename these outputs (e.g. `image-ref` instead of
-`image`) and must never omit them from its `workflow_call.outputs` block,
-even when it sets them to an empty string. Downstream workflows are allowed
-to assume all three output keys exist on every build job.
+A backend must never rename these outputs and must never omit them from
+its `workflow_call.outputs` block, even when it sets some of them to an
+empty string. Downstream workflows are allowed to assume all four output
+keys exist on every build job.
 
 ## The empty-output rule
 
 [#the-empty-output-rule](#the-empty-output-rule)
 
 Backends that don't produce a container image (see
-`reusable-build-make.yml` as the reference implementation) must:
-
-1. Set `image` and `digest` to empty strings rather than omitting them.
-2. Still populate `artifact-name` when `save-artifact: true`, so that a
-   downstream job can retrieve the build result the same way it would
-   retrieve a saved Docker image tarball.
+`reusable-build-make.yml` as the reference implementation) must set
+`image-name`, `image-tag`, and `image` to empty strings. `artifact-name`
+is still populated, since the raw build output (a binary, a bundle) is
+still uploaded as an artifact even when it isn't a container image.
 
 Downstream workflows must branch on emptiness rather than on which
-`reusable-build-*.yml` produced their input. For example,
-`reusable-trivy.yml` in `image` scan mode should be skipped by the caller
-(or short-circuit internally) when the upstream build job's `image` output
-is empty — not because "the Makefile backend was used," but because there
-is no image to scan.
+`reusable-build-*.yml` produced their input. For example, a caller should
+skip `reusable-docker-push.yml` or `reusable-trivy.yml` (image scan mode)
+when the upstream build job's `image` output is empty — not because "the
+Makefile backend was used," but because there is no image to push or scan.
 
 ---
 
@@ -115,8 +136,8 @@ is no image to scan.
 
 | Workflow | Backend | Produces an image? |
 | --- | --- | --- |
-| `reusable-docker-build.yml` | `docker buildx build` from a `Dockerfile` | Yes |
-| `reusable-build-buildpacks.yml` | Cloud Native Buildpacks (`pack build`) | Yes |
+| `reusable-docker-build.yml` | `docker buildx build` from a `Dockerfile`, local build + optional tar artifact | Yes |
+| `reusable-build-buildpacks.yml` | Cloud Native Buildpacks (`pack build`), local build + optional tar artifact | Yes |
 | `reusable-build-make.yml` | Arbitrary `make`/shell build command | No (artifact only), optionally Yes if a wrapper Dockerfile is supplied |
 
 A consuming repository selects **exactly one** of these per build job,
@@ -133,11 +154,13 @@ When contributing a new `reusable-build-<backend>.yml`:
 1. Name it `reusable-build-<backend>.yml` (existing exception:
    `reusable-docker-build.yml` keeps its original name to avoid a breaking
    rename of a workflow already referenced by consumers).
-2. Implement the shared inputs and secrets listed above, using identical
-   names.
+2. Implement the shared inputs listed above, using identical names — no
+   registry/push inputs.
 3. Implement the shared outputs listed above, including the empty-string
    convention when not applicable.
-4. Add an entry to `docs/reusable-workflows.md` under "Build workflows."
-5. Add a row to the "Current implementations" table above.
-6. Ship as a minor version bump — adding a new workflow file is additive
+4. Do not add a `registry-password` secret or any registry-auth step —
+   that belongs in `reusable-docker-push.yml` only.
+5. Add an entry to `docs/reusable-workflows.md` under "Build workflows."
+6. Add a row to the "Current implementations" table above.
+7. Ship as a minor version bump — adding a new workflow file is additive
    and does not require a major version increase.
