@@ -5,9 +5,7 @@
 `ci-toolkit` is a reusable GitHub Actions workflow library for centralizing CI/CD, testing, static analysis, security scanning, Docker image workflows, deployment, notifications, and repository synchronization.
 
 Instead of duplicating similar GitHub Actions workflows across multiple repositories, application repositories can call the workflows from this repository using GitHub Actions `workflow_call`.
-
 > **Application code, deployment configuration, infrastructure credentials, and secret values remain in the consuming repository. `ci-toolkit` provides the reusable CI/CD workflow contracts.**
-
 ---
 
 ## Why this exists?
@@ -83,6 +81,8 @@ Typical use cases include:
 - CodeQL static analysis
 - SonarQube analysis and quality gates
 - Docker image building
+- Buildpacks-based image building (no Dockerfile required)
+- Non-image builds (compiled binaries, static bundles) via Make/artifact backend
 - Docker image publishing
 - Trivy security scanning
 - Slack, Microsoft Teams, and Discord notifications
@@ -91,7 +91,7 @@ Typical use cases include:
 - Helm deployments
 - Repository mirroring or branch synchronization
 
-The test workflow is configurable rather than being tied to one specific application structure, while Docker and deployment workflows expose repository-specific paths and configuration through inputs.
+The test workflow is configurable rather than being tied to one specific application structure, while Docker, build, and deployment workflows expose repository-specific paths and configuration through inputs.
 
 ---
 
@@ -105,6 +105,7 @@ The toolkit can be used by:
 - backend services
 - microservices
 - Dockerized applications
+- Buildpacks-built applications (no Dockerfile)
 - Kubernetes applications
 - Helm-based applications
 - Docker Compose applications
@@ -185,26 +186,24 @@ The current repository structure is:
 ci-toolkit/
 │
 ├── .github/
-│   ├── workflows/
-│   │   ├── caller-ci.yml
-│   │   ├── release.yml
-│   │   ├── contract-diff.yml
-│   │   ├── reusable-codeql.yml
-│   │   ├── reusable-deploy-docker-compose.yml
-│   │   ├── reusable-deploy-helm.yml
-│   │   ├── reusable-deploy-kubernetes.yml
-│   │   ├── reusable-docker-build.yml
-│   │   ├── reusable-docker-push.yml
-│   │   ├── reusable-notification.yml
-│   │   ├── reusable-sonarqube.yml
-│   │   ├── reusable-sync.yml
-│   │   ├── reusable-test.yml
-│   │   └── reusable-trivy.yml
-│   │
-│   └── scripts/
-│       └── contract_diff.py
+│   └── workflows/
+│       ├── caller-ci.yml
+│       ├── reusable-codeql.yml
+│       ├── reusable-deploy-docker-compose.yml
+│       ├── reusable-deploy-helm.yml
+│       ├── reusable-deploy-kubernetes.yml
+│       ├── reusable-docker-build.yml
+│       ├── reusable-build-buildpacks.yml
+│       ├── reusable-build-make.yml
+│       ├── reusable-docker-push.yml
+│       ├── reusable-notification.yml
+│       ├── reusable-sonarqube.yml
+│       ├── reusable-sync.yml
+│       ├── reusable-test.yml
+│       └── reusable-trivy.yml
 │
 ├── docs/
+│   ├── build-interface.md
 │   ├── migration-checklist.md
 │   ├── permissions.md
 │   ├── reusable-workflows.md
@@ -222,9 +221,7 @@ ci-toolkit/
 └── README.md
 ```
 
-The repository currently contains 11 reusable workflows plus `caller-ci.yml`, which serves as a caller/example workflow.
-
-`release.yml` and `contract-diff.yml` are internal maintenance workflows for `ci-toolkit` itself — they are not `workflow_call` contracts and are never referenced by consuming repositories. See [Releases](#releases) and [Enforced contract compatibility](#enforced-contract-compatibility) below.
+The repository currently contains 13 reusable workflows plus `caller-ci.yml`, which serves as a caller/example workflow.
 
 ### `docker-compose/`
 
@@ -282,8 +279,6 @@ jobs:
       security-events: write
 ```
 
-Every `uses:` reference above is pinned to `@v1`. **Never reference a workflow from `ci-toolkit` using `@main`.** `main` is unpinned and can change — including breaking — at any time. Always pin to a release tag: `@v1` for a tracked, non-breaking-only major version, or `@v1.2.3` for a fixed, immutable snapshot. This rule applies to every example in this README and in [`docs/migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) — if you ever see `@main` in either document, treat it as a documentation bug and open an issue.
-
 The complete workflow contract, including inputs, secrets, permissions, and outputs, is documented in:
 
 [`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md).
@@ -296,22 +291,94 @@ The complete workflow contract, including inputs, secrets, permissions, and outp
 4. Create only the required secrets.
 5. Configure repository/environment variables where necessary.
 6. Configure required GitHub Actions permissions.
-7. Select one deployment target if deployment is required.
-8. Test the pipeline in a non-production environment.
-9. Promote the tested version to production.
+7. Select one build backend if your repository builds artifacts.
+8. Select one deployment strategy if deployment is required.
+9. Test the pipeline in a non-production environment.
+10. Promote the tested version to production.
 
 The migration checklist documents this process.
 
 ---
 
-# Deployment Target
+# Build strategies
 
-A consuming repository has **three deployment target options**:
+`ci-toolkit` does not assume every repository builds with Docker. A
+repository has **three build backend options**, each satisfying the same
+shared build interface documented in
+[`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md):
 
 ```
                  Application
                       |
-              Choose ONE target
+              Choose ONE build backend
+                      |
+       +--------------+--------------+
+       |              |              |
+       v              v              v
+    Docker        Buildpacks    Make / Artifact
+   (Dockerfile)   (pack build)  (build-command)
+       |              |              |
+       v              v              v
+  image + digest  image + digest  artifact (image
+                                   optional via
+                                   wrap-in-image)
+```
+
+## Important: choose exactly one
+
+For a given build job, select exactly one of:
+
+1. **`reusable-docker-build.yml`** — you have a `Dockerfile`.
+2. **`reusable-build-buildpacks.yml`** — you want an OCI image without
+   maintaining a `Dockerfile`.
+3. **`reusable-build-make.yml`** — your repository doesn't produce a
+   container image (a compiled binary, a static bundle), or you want a
+   `make`/shell-driven build with an optional image-wrapping step.
+
+The toolkit does **not** provide a generic build dispatcher, for the same
+reason it doesn't provide a generic deployment dispatcher below: each
+backend has a genuinely different set of inputs, and a `backend: docker |
+buildpacks | make` switch would just move the coupling from "which
+workflow do I call" to "which combination of inputs on one workflow is
+valid," without actually removing it.
+
+Downstream workflows (`reusable-docker-push.yml`, `reusable-trivy.yml`,
+and the deployment workflows below) don't care which build backend ran —
+they consume the shared `image` / `digest` / `tags` / `artifact-name`
+outputs regardless of origin.
+
+Example, using Buildpacks instead of Docker:
+
+```
+jobs:
+  build:
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-build-buildpacks.yml@v1
+    with:
+      image-name: ghcr.io/my-org/my-app
+      image-tag: ${{ github.sha }}
+      builder-image: paketobuildpacks/builder-jammy-base:latest
+      push: true
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  push-scan:
+    needs: build
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
+    with:
+      scan-type: image
+      scan-target: ${{ needs.build.outputs.image }}
+```
+
+---
+
+# Deployment strategies
+
+A consuming repository has **three deployment strategy options**:
+
+```
+                 Application
+                      |
+              Choose ONE strategy
                       |
        +--------------+--------------+
        |              |              |
@@ -522,27 +589,33 @@ my-app/
 
 # Workflow catalog
 
-`ci-toolkit` currently provides **11 reusable `workflow_call` workflows**.
+`ci-toolkit` currently provides **13 reusable `workflow_call` workflows**.
 
 | Workflow                             | Purpose                                                                       |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
 | `reusable-test.yml`                  | Install dependencies, lint, run tests, collect coverage, and upload artifacts |
 | `reusable-codeql.yml`                | GitHub CodeQL static analysis                                                 |
 | `reusable-sonarqube.yml`             | SonarQube analysis and quality gate                                           |
-| `reusable-docker-build.yml`          | Build Docker images and optionally push/save them                             |
-| `reusable-docker-push.yml`           | Load a saved image artifact and push it                                       |
+| `reusable-docker-build.yml`          | Build Docker images and optionally push/save them                            |
+| `reusable-build-buildpacks.yml`      | Build OCI images from source with Cloud Native Buildpacks, no Dockerfile      |
+| `reusable-build-make.yml`            | Run a `make`/shell build and upload the result; optional image wrapping      |
+| `reusable-docker-push.yml`           | Load a saved image artifact and push it                                      |
 | `reusable-trivy.yml`                 | Filesystem, image, configuration, or SBOM vulnerability scanning              |
 | `reusable-notification.yml`          | Slack, Microsoft Teams, or Discord notifications                              |
 | `reusable-deploy-docker-compose.yml` | Docker Compose deployment over SSH                                            |
-| `reusable-deploy-kubernetes.yml`     | Kubernetes deployment using `kubectl`                                         |
+| `reusable-deploy-kubernetes.yml`     | Kubernetes deployment using `kubectl`                                        |
 | `reusable-deploy-helm.yml`           | Helm-based Kubernetes deployment                                              |
-| `reusable-sync.yml`                  | Synchronize a branch into another repository                                  |
+| `reusable-sync.yml`                  | Synchronize a branch into another repository                                 |
 
-`caller-ci.yml` is present in `.github/workflows`, but it is a caller/example workflow and is not part of the 11 reusable workflow contracts. `release.yml` and `contract-diff.yml` are also present but are internal maintenance workflows, not `workflow_call` contracts.
+`caller-ci.yml` is present in `.github/workflows`, but it is a caller/example workflow and is not part of the 13 reusable workflow contracts.
 
 For the complete contract of every workflow, including inputs, secrets, permissions, and outputs, see:
 
 [`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md).
+
+For the shared contract that all build workflows implement, see:
+
+[`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md).
 
 ---
 
@@ -565,6 +638,14 @@ Defines:
 - outputs
 - deployment behavior
 
+## Build interface
+
+[`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md)
+
+Defines the shared inputs/outputs contract every `reusable-build-*.yml`
+(and `reusable-docker-build.yml`) must satisfy, and the empty-output
+convention used by backends that don't produce a container image.
+
 ## Permissions
 
 [`docs/permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md)
@@ -584,6 +665,13 @@ Documents:
 
 Secret **values must never be committed** to the repository.
 
+## Environments
+
+[`docs/environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md)
+
+Documents recommended GitHub Environments (development/staging/production),
+environment-specific secrets and variables, and production protection rules.
+
 ## Variables
 
 [`docs/variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)
@@ -596,14 +684,13 @@ Documents recommended non-sensitive repository and environment variables.
 
 Provides the step-by-step process for adopting `ci-toolkit` in an existing repository.
 
-The current checklist specifically covers selecting the required workflows, configuring inputs and secrets, permissions, runner configuration, and selecting exactly one deployment workflow.
+The current checklist specifically covers selecting the required workflows, configuring inputs and secrets, permissions, runner configuration, selecting one build backend, and selecting exactly one deployment workflow.
 
 ---
 
 # Configuration ownership
 
 A central principle of this toolkit is:
-
 > **Reusable workflow logic belongs in `ci-toolkit`; application-specific configuration belongs in the consuming repository.**
 
 For example, `ci-toolkit` should not assume that every application has:
@@ -683,25 +770,12 @@ v1 → v2
 Use minor or patch releases for backward-compatible changes such as:
 
 - adding optional inputs with defaults
+- adding a new `reusable-build-*.yml` or other new workflow file
 - bug fixes
 - documentation improvements
 - internal workflow improvements that do not change the caller contract
 
 The migration checklist also requires consuming repositories to pin workflow references to a release tag rather than `main`.
-
-## Enforced contract compatibility
-
-The "breaking change → major version" rule above is not just a documentation promise — it is checked automatically.
-
-On every pull request, [`.github/workflows/contract-diff.yml`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/.github/workflows/contract-diff.yml) compares the `on.workflow_call.inputs` / `.secrets` / `.outputs` block of every reusable workflow against the copy at the last released tag (using [`.github/scripts/contract_diff.py`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/.github/scripts/contract_diff.py)). If any input, secret, or output was removed or renamed, the PR is blocked unless it carries the `breaking-change` label or a conventional-commit `!` in the title (e.g. `feat!: drop legacy input`). This means a contract-breaking PR cannot merge silently — the person merging it has to explicitly acknowledge the break, which is also the signal to bump the major version on the next release.
-
-## Releases
-
-Pushing an annotated tag matching full semver (`v[0-9]+.[0-9]+.[0-9]+`, e.g. `v1.0.0`) triggers [`.github/workflows/release.yml`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/.github/workflows/release.yml), which publishes a GitHub Release automatically. Release notes are pulled from the matching `## [X.Y.Z]` section of `CHANGELOG.md`; if no matching section exists, GitHub's auto-generated notes are used instead. The floating major alias (`v1`, `v2`, …) is a separate, deliberately movable tag and does **not** trigger a release on its own — only full semver tags do.
-
-## Tag protection
-
-Full semver release tags (matching `v[0-9]+.[0-9]+.[0-9]+`) are protected by a repository ruleset: they cannot be force-pushed or deleted once published, so a published version is permanent. The floating major alias (`v1`, `v2`, …) is intentionally excluded from that ruleset and remains force-movable, since moving it forward to the latest compatible release is exactly what it's for.
 
 ---
 
@@ -796,15 +870,24 @@ The migration process is:
 5. Create only the required secrets.
 6. Configure non-sensitive variables.
 7. Configure GitHub Environments where required.
-8. Select **exactly one deployment target**.
-9. Keep the application's own manifest, Helm chart, or Compose file in the consuming repository.
-10. Configure the correct self-hosted runner where required.
-11. Configure the required GitHub Actions permissions.
-12. Verify registry, SonarQube, deployment, and notification credentials as applicable.
-13. Test in a non-production environment.
-14. Promote the tested workflow version to production.
+8. Select **exactly one build backend** (Docker, Buildpacks, or Make/Artifact) if the repository builds artifacts.
+9. Select **exactly one deployment strategy**.
+10. Keep the application's own manifest, Helm chart, or Compose file in the consuming repository.
+11. Configure the correct self-hosted runner where required.
+12. Configure the required GitHub Actions permissions.
+13. Verify registry, SonarQube, deployment, and notification credentials as applicable.
+14. Test in a non-production environment.
+15. Promote the tested workflow version to production.
 
 The repository's migration checklist explicitly recommends choosing one of:
+
+```
+reusable-docker-build.yml
+reusable-build-buildpacks.yml
+reusable-build-make.yml
+```
+
+for building, and one of:
 
 ```
 reusable-deploy-docker-compose.yml
@@ -830,12 +913,11 @@ When adding or modifying a reusable workflow:
 6. Define explicit `workflow_call` inputs.
 7. Define required secrets clearly.
 8. Document required permissions.
-9. Update `docs/reusable-workflows.md` when the workflow contract changes.
-10. Update the relevant documentation.
-11. Update `CHANGELOG.md`.
-12. Test the workflow before creating a release.
-
-All changes land through a pull request into `main`, which requires the `gate` status check (from `contract-diff.yml`) to pass before merging. `main` itself is protected against force pushes and deletion.
+9. If adding a build backend, satisfy the contract in `docs/build-interface.md`.
+10. Update `docs/reusable-workflows.md` when the workflow contract changes.
+11. Update the relevant documentation.
+12. Update `CHANGELOG.md`.
+13. Test the workflow before creating a release.
 
 ## Breaking changes
 
@@ -852,8 +934,6 @@ Breaking changes should receive a new major version.
 
 Backward-compatible changes should use a minor or patch release.
 
-If your PR intentionally makes a breaking change, add the `breaking-change` label (or start the PR title with a conventional-commit `!`, e.g. `feat!:`) — the `contract-diff` check will otherwise fail the PR automatically. See [Enforced contract compatibility](#enforced-contract-compatibility).
-
 ---
 
 # License
@@ -864,17 +944,19 @@ This project is licensed under the [MIT License](https://github.com/Ahmadzadeh92
 
 # Documentation
 
-| Resource                                                                                                      | Description                                   |
-| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs)                                         | Complete configuration documentation          |
-| [`reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md)   | Complete reusable workflow contracts          |
-| [`permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md)                 | GitHub Actions permissions                    |
-| [`secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md)                         | Secret inventory and requirements             |
-| [`variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)                     | Repository/environment variables              |
-| [`migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration procedure for existing repositories |
-| [`k8s/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/k8s)                                           | Kubernetes example configuration              |
-| [`helm/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/helm)                                         | Helm example configuration                    |
-| [`docker-compose/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docker-compose)                     | Docker Compose example configuration          |
+| Resource                                                                                                      | Description                                    |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs)                                         | Complete configuration documentation           |
+| [`reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md)   | Complete reusable workflow contracts           |
+| [`build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md)         | Shared contract for all build backends         |
+| [`permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md)                 | GitHub Actions permissions                     |
+| [`secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md)                         | Secret inventory and requirements              |
+| [`environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md)               | GitHub Environments setup and protection rules |
+| [`variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)                     | Repository/environment variables               |
+| [`migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration procedure for existing repositories  |
+| [`k8s/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/k8s)                                           | Kubernetes example configuration               |
+| [`helm/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/helm)                                         | Helm example configuration                     |
+| [`docker-compose/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docker-compose)                     | Docker Compose example configuration           |
 
 ---
 
@@ -885,21 +967,22 @@ This project is licensed under the [MIT License](https://github.com/Ahmadzadeh92
 The key principles are:
 
 - **Reusable workflows live under `.github/workflows/`.**
-- **There are currently 11 reusable workflow contracts.**
+- **There are currently 13 reusable workflow contracts.**
 - **`caller-ci.yml` is an example caller, not a reusable workflow.**
 - **Secrets remain in the consuming repository.**
 - **Application deployment configuration remains in the consuming repository.**
-- **Production workflows should use release tags rather than `main` — never `@main` in a production reference.**
-- **Breaking contract changes are enforced by CI (`contract-diff.yml`), not just documented.**
-- **Full semver release tags are immutable once published; the floating major alias remains movable.**
-- **`main` requires a passing pull request and the `gate` check before anything merges.**
+- **Production workflows should use release tags rather than `main`.**
 - **GitHub Actions permissions should follow least privilege.**
 - **Kubernetes/k3s deployments use a runner with Kubernetes access already configured.**
-- **A repository should select exactly one deployment target:**
-  - **Docker Compose**
-  - **Kubernetes / k3s**
-  - **Helm**
-- **There is no generic deployment dispatcher.**
+- **A repository should select exactly one build backend:**
+  * **Docker**
+  * **Buildpacks**
+  * **Make / Artifact**
+- **A repository should select exactly one deployment strategy:**
+  * **Docker Compose**
+  * **Kubernetes / k3s**
+  * **Helm**
+- **There is no generic build dispatcher and no generic deployment dispatcher.**
 - **The toolkit provides pipeline logic; the application repository owns its application and infrastructure configuration.**
 
 Start with the [migration checklist](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md), then use the [reusable workflow contracts](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) to configure the workflows required by your repository.

@@ -1,0 +1,121 @@
+name: Resolve Branch Context
+
+# Centralizes "which branch/tag deploys to which environment" for all
+# adopting repos. Call this once per pipeline run, then gate every deploy
+# job on `needs.resolve-context.outputs.should-deploy`.
+#
+# Usage from a caller repo:
+#
+#   jobs:
+#     resolve-context:
+#       uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-branch-context.yml@v1
+#       with:
+#         branching-strategy: git-flow
+#     deploy:
+#       needs: resolve-context
+#       if: needs.resolve-context.outputs.should-deploy == 'true'
+#       uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+#       with:
+#         namespace: ${{ needs.resolve-context.outputs.environment }}
+
+on:
+  workflow_call:
+    inputs:
+      branching-strategy:
+        description: "One of: trunk, github-flow, git-flow"
+        required: true
+        type: string
+      main-branch:
+        description: "Name of the trunk/main branch"
+        required: false
+        type: string
+        default: main
+      develop-branch:
+        description: "Name of the develop branch (git-flow only)"
+        required: false
+        type: string
+        default: develop
+    outputs:
+      environment:
+        description: "Resolved deploy environment: dev | staging | prod | '' (no match)"
+        value: ${{ jobs.resolve.outputs.environment }}
+      should-deploy:
+        description: "'true' if this ref should trigger a deploy under the chosen strategy"
+        value: ${{ jobs.resolve.outputs.should-deploy }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      should-deploy: ${{ steps.resolve.outputs.should-deploy }}
+    steps:
+      - name: Resolve environment and should-deploy
+        id: resolve
+        env:
+          STRATEGY: ${{ inputs.branching-strategy }}
+          MAIN_BRANCH: ${{ inputs.main-branch }}
+          DEVELOP_BRANCH: ${{ inputs.develop-branch }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+
+          environment=""
+          should_deploy="false"
+
+          is_semver_tag() {
+            [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          }
+
+          case "$STRATEGY" in
+
+            trunk)
+              # Single long-lived branch. Every push to main deploys straight
+              # to prod. Tags (if any) are release markers only, not triggers.
+              if [[ "$REF_TYPE" == "branch" && "$REF_NAME" == "$MAIN_BRANCH" ]]; then
+                environment="prod"
+                should_deploy="true"
+              fi
+              ;;
+
+            github-flow)
+              # main is always deployable; feature branches never deploy.
+              # A semver tag on main re-publishes/promotes the same build.
+              if [[ "$REF_TYPE" == "branch" && "$REF_NAME" == "$MAIN_BRANCH" ]]; then
+                environment="prod"
+                should_deploy="true"
+              elif [[ "$REF_TYPE" == "tag" ]] && is_semver_tag; then
+                environment="prod"
+                should_deploy="true"
+              fi
+              ;;
+
+            git-flow)
+              # develop -> staging. release/* -> staging (release candidate).
+              # main alone does NOT deploy - only a semver tag promotes to prod.
+              if [[ "$REF_TYPE" == "branch" && "$REF_NAME" == "$DEVELOP_BRANCH" ]]; then
+                environment="staging"
+                should_deploy="true"
+              elif [[ "$REF_TYPE" == "branch" && "$REF_NAME" == release/* ]]; then
+                environment="staging"
+                should_deploy="true"
+              elif [[ "$REF_TYPE" == "branch" && "$REF_NAME" == "$MAIN_BRANCH" ]]; then
+                environment="prod"
+                should_deploy="false"
+              elif [[ "$REF_TYPE" == "tag" ]] && is_semver_tag; then
+                environment="prod"
+                should_deploy="true"
+              fi
+              ;;
+
+            *)
+              echo "::error::Unknown branching-strategy '$STRATEGY'. Expected trunk, github-flow, or git-flow." >&2
+              exit 1
+              ;;
+          esac
+
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "should-deploy=$should_deploy" >> "$GITHUB_OUTPUT"
+
+          echo "strategy=$STRATEGY ref=$REF_NAME ($REF_TYPE) -> environment='$environment' should-deploy=$should_deploy"

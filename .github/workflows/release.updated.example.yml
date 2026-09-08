@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'release/**'
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+
+  resolve-context:
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-branch-context.yml@v1
+    with:
+      branching-strategy: git-flow   # <-- change this one value to switch strategy repo-wide
+
+  test:
+    name: Test & Quality Checks
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
+    with:
+      working-directory: services/api-gateway
+      python-versions: '["3.11", "3.12"]'
+
+  codeql:
+    name: CodeQL Security Scan
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
+    with:
+      language: python
+    permissions:
+      contents: read
+      security-events: write
+
+  sonarqube:
+    name: SonarQube Scan
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
+    secrets:
+      sonar-token: ${{ secrets.SONAR_TOKEN }}
+
+  build-image:
+    name: Build Image
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-build-image.yml@v1
+    with:
+      context: ./services/api-gateway
+      image-name: api-gateway
+      image-tag: ${{ github.sha }}
+      push: false
+
+  trivy:
+    name: Trivy Image Scan
+    needs: build-image
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
+    with:
+      image-ref: ${{ needs.build-image.outputs.image-ref }}
+      severity: CRITICAL,HIGH
+
+  # Aggregator: every quality/security gate feeds in here. Add or remove a
+  # check by editing ONLY this job's `needs:` list — release/deploy jobs
+  # below never change, since they only ever depend on `quality-gate`.
+  quality-gate:
+    name: Quality Gate
+    needs: [test, codeql, sonarqube, build-image, trivy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all checks passed
+        run: |
+          for result in \
+            "${{ needs.test.result }}" \
+            "${{ needs.codeql.result }}" \
+            "${{ needs.sonarqube.result }}" \
+            "${{ needs.build-image.result }}" \
+            "${{ needs.trivy.result }}"; do
+            if [ "$result" != "success" ]; then
+              echo "::error::One or more required checks did not succeed (found: $result)."
+              exit 1
+            fi
+          done
+          echo "All required checks passed."
+
+  release:
+    needs: [resolve-context, quality-gate]
+    if: >
+      needs.resolve-context.outputs.should-deploy == 'true' &&
+      needs.resolve-context.outputs.environment == 'prod' &&
+      needs.quality-gate.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need full history so CHANGELOG.md is complete
+
+      - name: Extract changelog section for this tag
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          if [ ! -f CHANGELOG.md ]; then
+            echo "No CHANGELOG.md in repo root, will auto-generate notes." >&2
+            echo "generate_notes=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; print; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+
+          if [ ! -s release_notes.md ]; then
+            echo "No CHANGELOG.md section found for $VERSION, will auto-generate notes." >&2
+            echo "generate_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (from CHANGELOG)
+        if: steps.changelog.outputs.generate_notes == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.changelog.outputs.generate_notes == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # Staging deploy: fires on develop/release/* under git-flow, per
+  # docs/branching-strategies.md, and only after test + codeql pass.
+  # Deployment target is Kubernetes - `environment` is passed straight
+  # through as the namespace.
+  deploy-staging:
+    needs: [resolve-context, quality-gate]
+    if: >
+      needs.resolve-context.outputs.should-deploy == 'true' &&
+      needs.resolve-context.outputs.environment == 'staging' &&
+      needs.quality-gate.result == 'success'
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+    with:
+      namespace: ${{ needs.resolve-context.outputs.environment }}
+
+  # Prod deploy: fires only on a semver tag under git-flow, gated on the
+  # same quality checks. Split out from the `release` job above so a
+  # GitHub Release and the actual Kubernetes rollout can fail/retry
+  # independently.
+  deploy-prod:
+    needs: [resolve-context, quality-gate]
+    if: >
+      needs.resolve-context.outputs.should-deploy == 'true' &&
+      needs.resolve-context.outputs.environment == 'prod' &&
+      needs.quality-gate.result == 'success'
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+    with:
+      namespace: ${{ needs.resolve-context.outputs.environment }}
