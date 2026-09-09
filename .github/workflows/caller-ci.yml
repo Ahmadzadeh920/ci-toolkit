@@ -15,7 +15,7 @@ jobs:
 
     name: Test
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
 
     with:
 
@@ -47,7 +47,7 @@ jobs:
       actions: read
       security-events: write
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
 
     with:
 
@@ -67,7 +67,7 @@ jobs:
 
     needs: test
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
 
     with:
 
@@ -100,7 +100,7 @@ jobs:
       - test
       - codeql
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-build.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-build.yml@v1
 
     with:
 
@@ -133,7 +133,7 @@ jobs:
 
     needs: docker-build
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
 
     with:
 
@@ -183,7 +183,7 @@ jobs:
       contents: read
       packages: write
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-push.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-push.yml@v1
 
     with:
 
@@ -214,7 +214,7 @@ jobs:
     needs: 
       - docker-build
       - docker-push
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-helm.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-helm.yml@v1
     with: 
       runner: k3s-helm
       application: auth-gateway 
@@ -236,7 +236,7 @@ jobs:
     needs: 
       - docker-build
       - docker-push
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
     with:
       runner: k3s-kubectl
       application: auth-gateway
@@ -256,7 +256,7 @@ jobs:
     needs: 
       - docker-build
       - docker-push
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml@v1
     with:
       runner: docker-compose
       environment: production
@@ -285,7 +285,7 @@ jobs:
     needs: 
       - Deploy-Kubernetes 
 
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sync.yml
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sync.yml@v1
 
 
     with:
