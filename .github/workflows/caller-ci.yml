@@ -10,13 +10,13 @@ on:
 
 jobs:
   test:
-    uses: your-org/ci-toolkit/.github/workflows/reusable-test.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
     with:
       python-versions: '["3.11", "3.12"]'
       working-directory: .
 
   codeql:
-    uses: your-org/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
     permissions:
       actions: read
       contents: read
@@ -24,7 +24,7 @@ jobs:
 
   sonarqube:
     needs: test
-    uses: your-org/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
     secrets:
       sonar-token: ${{ secrets.SONAR_TOKEN }}
       sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
@@ -32,7 +32,7 @@ jobs:
 
   docker-build:
     needs: test
-    uses: your-org/ci-toolkit/.github/workflows/reusable-docker-build.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-build.yml@v1
     with:
       image-name: my-app
       registry-username: ${{ github.repository_owner }}
@@ -42,7 +42,7 @@ jobs:
 
   trivy:
     needs: docker-build
-    uses: your-org/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
     permissions:
       contents: read
       security-events: write
@@ -55,7 +55,7 @@ jobs:
   deploy-compose:
     needs: docker-build
     if: false # enable this job if you deploy via Docker Compose over SSH
-    uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml@v1
     with:
       environment: production
       compose-file: docker-compose/docker-compose.yml # this is example of docker-compose
@@ -72,7 +72,7 @@ jobs:
   deploy-kubernetes:
     needs: docker-build
     if: false # enable this job if you deploy via kubectl
-    uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
     with:
       application: my-app
       namespace: my-namespace
@@ -85,7 +85,7 @@ jobs:
   deploy-helm:
     needs: docker-build
     if: false # enable this job if you deploy via Helm
-    uses: your-org/ci-toolkit/.github/workflows/reusable-deploy-helm.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-helm.yml@v1
     with:
       application: my-app
       namespace: my-namespace
@@ -98,7 +98,7 @@ jobs:
   notify:
     needs: [docker-build]
     if: always()
-    uses: your-org/ci-toolkit/.github/workflows/reusable-notification.yml@v1
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-notification.yml@v1
     with:
       channel: slack
       status: ${{ needs.docker-build.result }}
