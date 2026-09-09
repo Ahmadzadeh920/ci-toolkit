@@ -1,6 +1,3 @@
-# Example: place this in a consuming repository at .github/workflows/ci.yml
-# Replace `your-org/ci-toolkit@v1` with your actual toolkit repo and tag.
-
 name: CI/CD Pipeline
 
 on:
@@ -8,100 +5,298 @@ on:
     branches: [main]
   pull_request:
 
+
 jobs:
+###############################################################################
+# Test
+###############################################################################
+
   test:
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml@v1
+
+    name: Test
+
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-test.yml
+
     with:
-      python-versions: '["3.11", "3.12"]'
-      working-directory: .
+
+      runner: ubuntu-latest
+
+      python-versions: '["3.11","3.12"]'
+
+      working-directory: services/api-gateway
+
+      requirements-file: requirements.txt
+
+      lint: true
+
+      run-tests: true
+
+      artifact-name: api-test-results
+
+###############################################################################
+# CodeQL
+###############################################################################
 
   codeql:
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml@v1
+
+    name: CodeQL
+
+    needs: test
     permissions:
-      actions: read
       contents: read
+      actions: read
       security-events: write
 
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-codeql.yml
+
+    with:
+
+      runner: ubuntu-latest
+
+      languages: python
+
+      build-mode: none
+
+###############################################################################
+# SonarQube
+###############################################################################
+
   sonarqube:
+
+    name: SonarQube
+
     needs: test
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
+
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml
+
+    with:
+
+      runner: sonar
+      project-base-dir: .
+
+      download-artifact: true
+
+      artifact-name: api-test-results-3.12
+
+      quality-gate: true
+
     secrets:
+
       sonar-token: ${{ secrets.SONAR_TOKEN }}
+
       sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
       DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
+###############################################################################
+# Docker Build
+###############################################################################
+
   docker-build:
-    needs: test
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-build.yml@v1
+
+    name: Docker Build
+
+    needs:
+
+      - test
+      - codeql
+
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-build.yml
+
     with:
-      image-name: my-app
-      registry-username: ${{ github.repository_owner }}
-      push: true
-    secrets:
-      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      runner: ubuntu-latest
+
+      context: services/api-gateway
+
+      dockerfile: services/api-gateway/Dockerfile
+
+      image-name: auth-gateway
+
+      image-tag: ${{ github.sha }} 
+
+      save-artifact: true
+
+      artifact-name: docker-image
+
+###############################################################################
+# Trivy
+###############################################################################
 
   trivy:
-    needs: docker-build
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
+
+    name: Trivy Scan
+
+   
     permissions:
       contents: read
       security-events: write
-    with:
-      scan-type: image
-      scan-target: ghcr.io/${{ github.repository_owner }}/my-app:${{ github.sha }}
 
-  # --- Choose ONE deployment target below ---
-
-  deploy-compose:
     needs: docker-build
-    if: false # enable this job if you deploy via Docker Compose over SSH
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml@v1
-    with:
-      environment: production
-      compose-file: docker-compose/docker-compose.yml # this is example of docker-compose
 
-      image: ghcr.io/${{ github.repository_owner }}/my-app
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml
+
+    with:
+
+      scan-type: image
+
+      scan-target: ${{ needs.docker-build.outputs.image }}
+
+      download-artifact: true
+
+      artifact-name: ${{ needs.docker-build.outputs.artifact-name }}
+
+      severity: HIGH,CRITICAL
+
+      scanners: vuln,secret
+
+      report-artifact-name: trivy-results
+
+  convert-owner:
+
+      name: Convert Repository Owner to Lowercase
+
+      runs-on: ubuntu-latest
+
+      outputs:
+        owner: ${{ steps.owner.outputs.owner }}
+
+      steps:
+
+        - name: Convert owner
+          id: owner
+          shell: bash
+          run: |
+            echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+###############################################################################
+# Docker Push
+###############################################################################
+
+  docker-push:
+
+    name: Docker Push
+
+    needs: 
+      - trivy
+      - docker-build
+      - convert-owner
+    permissions:
+      contents: read
+      packages: write
+
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-docker-push.yml
+
+    with:
+
+      runner: ubuntu-latest
+
+      registry: ghcr.io
+
+      registry-username:  ${{ needs.convert-owner.outputs.owner }}
+
+      image-name: ${{ needs.docker-build.outputs.image-name }}
+
+      image-tag: ${{ needs.docker-build.outputs.image-tag }}
+
+      artifact-name: ${{ needs.docker-build.outputs.artifact-name }}
+
+    secrets:
+
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+
+
+###############################################################################
+# deploy with helm
+###############################################################################
+  deploy-helm:
+
+    name: Deploy helm 
+    needs: 
+      - docker-build
+      - docker-push
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-helm.yml
+    with: 
+      runner: k3s-helm
+      application: auth-gateway 
+      namespace: myapp
+      helm-chart: ./helm/auth-gateway 
+      values-file: ./helm/auth-gateway/values.yaml 
+      image-repository: ghcr.io/ahmadzadeh920/auth-gateway
+      image-tag: ${{ github.sha }} 
+    secrets:
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+     
+
+###############################################################################
+# deploy with Kubernetes
+###############################################################################
+
+  deploy-Kubernetes:
+    name: Deploy Kubernetes 
+    needs: 
+      - docker-build
+      - docker-push
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml
+    with:
+      runner: k3s-kubectl
+      application: auth-gateway
+      namespace: myapp
+      manifest: ./k8s
+      image-repository: ghcr.io/ahmadzadeh920/auth-gateway
       image-tag: ${{ github.sha }}
-      remote-directory: /opt/my-app
-      sync-apth: Files/directories to synchronize to remote server
+    secrets:
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+     
+###############################################################################
+# deploy with docker-compose 
+###############################################################################
+
+  deploy-docker-compose:
+    name: Deploy docker compose 
+    needs: 
+      - docker-build
+      - docker-push
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-docker-compose.yml
+    with:
+      runner: docker-compose
+      environment: production
+      compose-file: ./docker-compose-pro.yml
+      image: ghcr.io/ahmadzadeh920/auth-gateway
+      image-tag: ${{ github.sha }}
+      remote-directory: /home/fatemeh/app   # add this line
     secrets:
       ssh-host: ${{ secrets.SSH_HOST }}
       ssh-user: ${{ secrets.SSH_USER }}
       ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-  deploy-kubernetes:
-    needs: docker-build
-    if: false # enable this job if you deploy via kubectl
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
-    with:
-      application: my-app
-      namespace: my-namespace
-      manifest: examples/kubernetes/deployment.yaml
-      image-repository: ghcr.io/${{ github.repository_owner }}/my-app
-      image-tag: ${{ github.sha }}
-    secrets:
       DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+      ghcr-username: ${{ github.actor }}
+      ghcr-token: ${{ secrets.GHCR_PAT }}
+     
 
-  deploy-helm:
-    needs: docker-build
-    if: false # enable this job if you deploy via Helm
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-helm.yml@v1
-    with:
-      application: my-app
-      namespace: my-namespace
-      helm-chart: examples/helm
-      image-repository: ghcr.io/${{ github.repository_owner }}/my-app
-      image-tag: ${{ github.sha }}
-    secrets:
-      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+###############################################################################
+# Repository Sync
+###############################################################################
 
-  notify:
-    needs: [docker-build]
-    if: always()
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-notification.yml@v1
+  sync:
+
+    name: Repository Sync
+  
+
+    needs: 
+      - Deploy-Kubernetes 
+
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sync.yml
+
+
     with:
-      channel: slack
-      status: ${{ needs.docker-build.result }}
-      title: my-app deployment
+
+      source-branch: main
+
+      target-branch: release
+
+      target-repository: Ahmadzadeh920/auth-gateway-platform
+
     secrets:
-      slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
+      target-token: ${{ secrets.REPO_SYNC_TOKEN }}
+
+
