@@ -2,10 +2,12 @@
 
 **Versioned, portable reusable GitHub Actions workflows for standardized CI/CD.**
 
-`ci-toolkit` is a reusable GitHub Actions workflow library for centralizing CI/CD, testing, static analysis, security scanning, Docker image workflows, deployment, notifications, and repository synchronization.
+`ci-toolkit` is a reusable GitHub Actions workflow library for centralizing CI/CD, testing, static analysis, security scanning, application builds, Docker image workflows, deployment, notifications, repository synchronization, and branching-strategy resolution.
 
 Instead of duplicating similar GitHub Actions workflows across multiple repositories, application repositories can call the workflows from this repository using GitHub Actions `workflow_call`.
+
 > **Application code, deployment configuration, infrastructure credentials, and secret values remain in the consuming repository. `ci-toolkit` provides the reusable CI/CD workflow contracts.**
+
 ---
 
 ## Why this exists?
@@ -16,9 +18,11 @@ CI/CD workflows are often copied from one repository to another. Over time, thos
 - different security settings
 - different permissions
 - different Docker configurations
+- different build tooling (Docker, buildpacks, Make) baked into the app repo instead of decoupled from it
 - different deployment logic
 - different notification mechanisms
 - different secret requirements
+- different branching/environment-promotion rules
 
 Maintaining those duplicated workflows becomes increasingly difficult as the number of repositories grows.
 
@@ -30,6 +34,7 @@ Maintaining those duplicated workflows becomes increasingly difficult as the num
 - permissions
 - runner configuration
 - deployment contracts
+- branching-strategy contracts
 
 A consuming repository can therefore use a stable workflow such as:
 
@@ -55,10 +60,11 @@ Application repository
 +--------------------------------+
 |          ci-toolkit            |
 |                                |
+| Branch Context Resolution      |
 | Test / Lint                    |
 | CodeQL                         |
 | SonarQube                      |
-| Docker Build                   |
+| Build (Docker / Buildpacks / Make) |
 | Docker Push                    |
 | Trivy                          |
 | Notifications                  |
@@ -76,13 +82,14 @@ Application repository
 Typical use cases include:
 
 - Multi-repository CI/CD standardization
+- Centralized branching-strategy resolution (trunk-based, GitHub Flow, or Git Flow) without duplicating ref/branch conditionals across every workflow
 - Python and general application testing
 - Linting and test execution
 - CodeQL static analysis
 - SonarQube analysis and quality gates
 - Docker image building
-- Buildpacks-based image building (no Dockerfile required)
-- Non-image builds (compiled binaries, static bundles) via Make/artifact backend
+- Cloud Native Buildpacks builds (no Dockerfile required)
+- Make-based builds (compiled binaries, non-containerized artifacts)
 - Docker image publishing
 - Trivy security scanning
 - Slack, Microsoft Teams, and Discord notifications
@@ -91,7 +98,7 @@ Typical use cases include:
 - Helm deployments
 - Repository mirroring or branch synchronization
 
-The test workflow is configurable rather than being tied to one specific application structure, while Docker, build, and deployment workflows expose repository-specific paths and configuration through inputs.
+The test workflow is configurable rather than being tied to one specific application structure, while Docker and deployment workflows expose repository-specific paths and configuration through inputs. Branching-strategy resolution is likewise configurable per repository through a single input rather than being hard-coded per workflow. The build step is decoupled from the application in the same way: a repository picks the build workflow matching its packaging method (Docker, Buildpacks, or Make) rather than the toolkit assuming Docker is the only option.
 
 ---
 
@@ -105,13 +112,15 @@ The toolkit can be used by:
 - backend services
 - microservices
 - Dockerized applications
-- Buildpacks-built applications (no Dockerfile)
+- Buildpacks-compatible applications (any language a Cloud Native Buildpack supports)
+- Make-based / compiled-artifact applications
 - Kubernetes applications
 - Helm-based applications
 - Docker Compose applications
 - internal tools
 - repositories requiring CodeQL or Trivy
 - repositories requiring SonarQube quality gates
+- repositories that want a single source of truth for "which branch/tag deploys to which environment"
 
 The toolkit is not intended to own application-specific configuration.
 
@@ -126,6 +135,7 @@ The consuming repository remains responsible for its own:
 - GitHub Environments
 - secrets
 - infrastructure credentials
+- which branching strategy it adopts (the toolkit resolves the *consequences* of that choice, it doesn't impose the choice itself)
 
 ---
 
@@ -188,6 +198,7 @@ ci-toolkit/
 ├── .github/
 │   └── workflows/
 │       ├── caller-ci.yml
+│       ├── reusable-branch-context.yml
 │       ├── reusable-codeql.yml
 │       ├── reusable-deploy-docker-compose.yml
 │       ├── reusable-deploy-helm.yml
@@ -203,6 +214,7 @@ ci-toolkit/
 │       └── reusable-trivy.yml
 │
 ├── docs/
+│   ├── branching-strategies.md
 │   ├── build-interface.md
 │   ├── migration-checklist.md
 │   ├── permissions.md
@@ -221,7 +233,11 @@ ci-toolkit/
 └── README.md
 ```
 
-The repository currently contains 13 reusable workflows plus `caller-ci.yml`, which serves as a caller/example workflow.
+The repository currently contains 14 reusable workflows. `caller-ci.yml`,
+`release.yml`, `contract-diff.yml`, and `release.updated.example.yml` are
+caller/example workflows demonstrating how a consuming repository wires
+these contracts together — they are not part of the 14 reusable workflow
+contracts themselves.
 
 ### `docker-compose/`
 
@@ -237,7 +253,7 @@ Contains Kubernetes-related example configuration.
 
 ### `docs/`
 
-Contains the configuration contracts and migration documentation for consuming repositories.
+Contains the configuration contracts, branching-strategy reference, build-interface reference, and migration documentation for consuming repositories.
 
 ---
 
@@ -279,106 +295,148 @@ jobs:
       security-events: write
 ```
 
+If your repository also needs to know *where* a given ref should deploy, add branch-context resolution:
+
+```
+jobs:
+  resolve-context:
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-branch-context.yml@v1
+    with:
+      branching-strategy: git-flow   # trunk | github-flow | git-flow
+
+  deploy:
+    needs: resolve-context
+    if: needs.resolve-context.outputs.should-deploy == 'true'
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+    with:
+      namespace: ${{ needs.resolve-context.outputs.environment }}
+```
+
 The complete workflow contract, including inputs, secrets, permissions, and outputs, is documented in:
 
 [`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md).
 
+The three supported branching strategies and their ref-to-environment mappings are documented in:
+
+[`docs/branching-strategies.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/branching-strategies.md).
+
+The three supported build methods and their common output contract are documented in:
+
+[`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md).
+
 ### Recommended adoption sequence
 
-1. Choose the reusable workflows required by your repository.
-2. Pin them to a release tag.
-3. Configure their required inputs.
-4. Create only the required secrets.
-5. Configure repository/environment variables where necessary.
-6. Configure required GitHub Actions permissions.
-7. Select one build backend if your repository builds artifacts.
-8. Select one deployment strategy if deployment is required.
-9. Test the pipeline in a non-production environment.
-10. Promote the tested version to production.
+1. Choose a branching strategy (`trunk`, `github-flow`, or `git-flow`) — see `docs/branching-strategies.md`.
+2. Choose a build method (`reusable-docker-build.yml`, `reusable-build-buildpacks.yml`, or `reusable-build-make.yml`) — see `docs/build-interface.md`.
+3. Choose the reusable workflows required by your repository.
+4. Pin them to a release tag.
+5. Configure their required inputs, including `resolve-context`'s `branching-strategy` (and `main-branch`/`develop-branch` if your branch names differ from the defaults).
+6. Create only the required secrets.
+7. Configure repository/environment variables where necessary.
+8. Configure required GitHub Actions permissions.
+9. Select one deployment target if deployment is required.
+10. Wire every deploy/release job's `needs:` and `if:` off `resolve-context`'s outputs — and off any quality-gate jobs (test/CodeQL/SonarQube/Trivy/build) you require before deploying.
+11. Test the pipeline in a non-production environment.
+12. Promote the tested version to production.
 
 The migration checklist documents this process.
 
 ---
 
-# Build strategies
+# Branching Strategy Resolution
 
-`ci-toolkit` does not assume every repository builds with Docker. A
-repository has **three build backend options**, each satisfying the same
-shared build interface documented in
-[`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md):
+Every deploy or release workflow eventually has to answer the same question: **given this branch or tag, which environment should it deploy to, and should it deploy at all?** Answering that inline, per workflow, is how repositories end up with inconsistent and duplicated branch conditionals.
+
+`reusable-branch-context.yml` centralizes that answer. A caller supplies a single `branching-strategy` input; the workflow inspects the triggering ref and returns:
+
+- `environment` — `dev` | `staging` | `prod` (or empty if the ref doesn't map to a deploy)
+- `should-deploy` — `'true'` | `'false'`
+
+Every deploy/release job in the caller repository then only ever checks these two outputs — it never needs to know the underlying branch-naming rules.
 
 ```
-                 Application
-                      |
-              Choose ONE build backend
-                      |
-       +--------------+--------------+
-       |              |              |
-       v              v              v
-    Docker        Buildpacks    Make / Artifact
-   (Dockerfile)   (pack build)  (build-command)
-       |              |              |
-       v              v              v
-  image + digest  image + digest  artifact (image
-                                   optional via
-                                   wrap-in-image)
+jobs:
+  resolve-context:
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-branch-context.yml@v1
+    with:
+      branching-strategy: git-flow
+  deploy:
+    needs: resolve-context
+    if: needs.resolve-context.outputs.should-deploy == 'true'
+    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-deploy-kubernetes.yml@v1
+    with:
+      namespace: ${{ needs.resolve-context.outputs.environment }}
+```
+
+## Supported strategies
+
+| Strategy      | Summary                                                                 |
+| ------------- | ------------------------------------------------------------------------ |
+| `trunk`       | Single long-lived branch; every push to `main` deploys to `prod`.        |
+| `github-flow` | `main` is always deployable; a semver tag on `main` promotes the same build to `prod`. |
+| `git-flow`    | `develop`/`release/*` deploy to `staging`; only a semver tag deploys to `prod`. `main` alone does not deploy. |
+
+The full ref-to-environment mapping table for each strategy is documented in [`docs/branching-strategies.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/branching-strategies.md).
+
+## A note on `if:` and quality gates
+
+`resolve-context`'s outputs answer *where* a ref should go, not *whether the code is good enough to go there*. Deploy/release jobs still need their own `needs:`/`if:` wiring against your test, CodeQL, SonarQube, and Trivy jobs. Because assigning a custom `if:` condition to a job replaces GitHub Actions' implicit "only run if all `needs:` succeeded" behavior, remember to explicitly check `needs.<job>.result == 'success'` for every quality gate you depend on — `resolve-context`'s outputs alone are not a substitute for that.
+
+---
+
+# Build Interface
+
+Just as deployment is decoupled from the application repository, **build is decoupled from the application too.** Not every application builds the same way: some ship a `Dockerfile`, some rely on Cloud Native Buildpacks to avoid maintaining one, and some produce a compiled artifact via `make` rather than a container image at all. `ci-toolkit` does not assume Docker is the only build path.
+
+A consuming repository has **three build method options**:
+
+```
+                 Application source
+                        |
+                Choose ONE build method
+                        |
+       +----------------+----------------+
+       |                |                |
+       v                v                v
+   Dockerfile        Buildpacks         Make
+       |                |                |
+       v                v                v
+reusable-docker-  reusable-build-  reusable-build-
+   build.yml       buildpacks.yml     make.yml
+       |                |                |
+       v                v                v
+        common output contract (image-ref / artifact-path)
 ```
 
 ## Important: choose exactly one
 
-For a given build job, select exactly one of:
+For a given application, select exactly one of:
 
-1. **`reusable-docker-build.yml`** — you have a `Dockerfile`.
-2. **`reusable-build-buildpacks.yml`** — you want an OCI image without
-   maintaining a `Dockerfile`.
-3. **`reusable-build-make.yml`** — your repository doesn't produce a
-   container image (a compiled binary, a static bundle), or you want a
-   `make`/shell-driven build with an optional image-wrapping step.
+1. **`reusable-docker-build.yml`** — builds from a `Dockerfile` in the repository.
+2. **`reusable-build-buildpacks.yml`** — builds using Cloud Native Buildpacks; no `Dockerfile` required.
+3. **`reusable-build-make.yml`** — builds via a `Makefile` target, for applications that produce a binary or non-containerized artifact rather than an image.
 
-The toolkit does **not** provide a generic build dispatcher, for the same
-reason it doesn't provide a generic deployment dispatcher below: each
-backend has a genuinely different set of inputs, and a `backend: docker |
-buildpacks | make` switch would just move the coupling from "which
-workflow do I call" to "which combination of inputs on one workflow is
-valid," without actually removing it.
+As with deployment, there is no generic build dispatcher — the consuming repository calls the workflow matching how its application is actually packaged.
 
-Downstream workflows (`reusable-docker-push.yml`, `reusable-trivy.yml`,
-and the deployment workflows below) don't care which build backend ran —
-they consume the shared `image` / `digest` / `tags` / `artifact-name`
-outputs regardless of origin.
+## Why decouple build from the application
 
-Example, using Buildpacks instead of Docker:
+Downstream jobs — `reusable-trivy.yml`, `reusable-docker-push.yml`, and every deploy workflow — only need a build's *output* (an image reference or artifact path), not knowledge of *how* it was produced. This means:
 
-```
-jobs:
-  build:
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-build-buildpacks.yml@v1
-    with:
-      image-name: ghcr.io/my-org/my-app
-      image-tag: ${{ github.sha }}
-      builder-image: paketobuildpacks/builder-jammy-base:latest
-      push: true
-    secrets:
-      registry-password: ${{ secrets.GITHUB_TOKEN }}
+- A repository can switch from a hand-written `Dockerfile` to Buildpacks (or vice versa) without touching its test, scan, push, or deploy jobs — only the build job call changes.
+- New build methods can be added to `ci-toolkit` in the future without any existing caller workflow needing to change.
 
-  push-scan:
-    needs: build
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-trivy.yml@v1
-    with:
-      scan-type: image
-      scan-target: ${{ needs.build.outputs.image }}
-```
+The exact inputs, secrets, and outputs of each build workflow, and the common output contract all three expose, are documented in [`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md).
 
 ---
 
-# Deployment strategies
+# Deployment Target
 
-A consuming repository has **three deployment strategy options**:
+A consuming repository has **three deployment target options**:
 
 ```
                  Application
                       |
-              Choose ONE strategy
+              Choose ONE target
                       |
        +--------------+--------------+
        |              |              |
@@ -401,7 +459,7 @@ For a given application deployment, select exactly one of:
 2. **Kubernetes / k3s**
 3. **Helm**
 
-The toolkit does **not** provide a generic deployment dispatcher. The consuming repository directly calls the workflow corresponding to its infrastructure.
+The toolkit does **not** provide a generic deployment dispatcher. The consuming repository directly calls the workflow corresponding to its infrastructure. `resolve-context`'s `environment` output feeds whichever of the three you choose (as `namespace`, or as the relevant compose/values-file selector).
 
 ---
 
@@ -589,33 +647,30 @@ my-app/
 
 # Workflow catalog
 
-`ci-toolkit` currently provides **13 reusable `workflow_call` workflows**.
+`ci-toolkit` currently provides **14 reusable `workflow_call` workflows**.
 
 | Workflow                             | Purpose                                                                       |
-| ------------------------------------ | ----------------------------------------------------------------------------- |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| `reusable-branch-context.yml`        | Resolves a branching strategy (trunk / github-flow / git-flow) and the triggering ref into `environment` and `should-deploy` outputs |
 | `reusable-test.yml`                  | Install dependencies, lint, run tests, collect coverage, and upload artifacts |
 | `reusable-codeql.yml`                | GitHub CodeQL static analysis                                                 |
 | `reusable-sonarqube.yml`             | SonarQube analysis and quality gate                                           |
-| `reusable-docker-build.yml`          | Build Docker images and optionally push/save them                            |
-| `reusable-build-buildpacks.yml`      | Build OCI images from source with Cloud Native Buildpacks, no Dockerfile      |
-| `reusable-build-make.yml`            | Run a `make`/shell build and upload the result; optional image wrapping      |
-| `reusable-docker-push.yml`           | Load a saved image artifact and push it                                      |
+| `reusable-docker-build.yml`          | Build a Docker image from a `Dockerfile` and optionally push/save it          |
+| `reusable-build-buildpacks.yml`      | Build an image using Cloud Native Buildpacks (no `Dockerfile` required)       |
+| `reusable-build-make.yml`            | Build a compiled/non-containerized artifact via a `Makefile` target           |
+| `reusable-docker-push.yml`           | Load a saved image artifact and push it                                       |
 | `reusable-trivy.yml`                 | Filesystem, image, configuration, or SBOM vulnerability scanning              |
 | `reusable-notification.yml`          | Slack, Microsoft Teams, or Discord notifications                              |
 | `reusable-deploy-docker-compose.yml` | Docker Compose deployment over SSH                                            |
-| `reusable-deploy-kubernetes.yml`     | Kubernetes deployment using `kubectl`                                        |
+| `reusable-deploy-kubernetes.yml`     | Kubernetes deployment using `kubectl`                                         |
 | `reusable-deploy-helm.yml`           | Helm-based Kubernetes deployment                                              |
-| `reusable-sync.yml`                  | Synchronize a branch into another repository                                 |
+| `reusable-sync.yml`                  | Synchronize a branch into another repository                                  |
 
-`caller-ci.yml` is present in `.github/workflows`, but it is a caller/example workflow and is not part of the 13 reusable workflow contracts.
+`caller-ci.yml`, `release.yml`, `contract-diff.yml`, and `release.updated.example.yml` are caller/example workflows and are not part of the 14 reusable workflow contracts.
 
 For the complete contract of every workflow, including inputs, secrets, permissions, and outputs, see:
 
 [`docs/reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md).
-
-For the shared contract that all build workflows implement, see:
-
-[`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md).
 
 ---
 
@@ -638,13 +693,17 @@ Defines:
 - outputs
 - deployment behavior
 
+## Branching strategies
+
+[`docs/branching-strategies.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/branching-strategies.md)
+
+Documents the three supported branching strategies and their complete ref-to-environment mapping tables, plus the Kubernetes namespace-naming convention that `environment` feeds into.
+
 ## Build interface
 
 [`docs/build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md)
 
-Defines the shared inputs/outputs contract every `reusable-build-*.yml`
-(and `reusable-docker-build.yml`) must satisfy, and the empty-output
-convention used by backends that don't produce a container image.
+Documents the three supported build methods (Docker, Buildpacks, Make), their inputs/secrets, and the common output contract that downstream test/scan/push/deploy jobs rely on regardless of which build method a repository chose.
 
 ## Permissions
 
@@ -665,13 +724,6 @@ Documents:
 
 Secret **values must never be committed** to the repository.
 
-## Environments
-
-[`docs/environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md)
-
-Documents recommended GitHub Environments (development/staging/production),
-environment-specific secrets and variables, and production protection rules.
-
 ## Variables
 
 [`docs/variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)
@@ -684,13 +736,14 @@ Documents recommended non-sensitive repository and environment variables.
 
 Provides the step-by-step process for adopting `ci-toolkit` in an existing repository.
 
-The current checklist specifically covers selecting the required workflows, configuring inputs and secrets, permissions, runner configuration, selecting one build backend, and selecting exactly one deployment workflow.
+The current checklist specifically covers choosing a branching strategy, selecting the required workflows, configuring inputs and secrets, permissions, runner configuration, and selecting exactly one deployment workflow.
 
 ---
 
 # Configuration ownership
 
 A central principle of this toolkit is:
+
 > **Reusable workflow logic belongs in `ci-toolkit`; application-specific configuration belongs in the consuming repository.**
 
 For example, `ci-toolkit` should not assume that every application has:
@@ -702,7 +755,7 @@ helm/my-app/
 docker-compose/docker-compose.yml
 ```
 
-Instead, the consuming repository supplies its own paths.
+Instead, the consuming repository supplies its own paths. Likewise, `ci-toolkit` should not assume every repository uses the same branch names — `reusable-branch-context.yml` accepts `main-branch`/`develop-branch` overrides for repositories that deviate from `main`/`develop` — or the same build tooling, which is why build is split across `reusable-docker-build.yml`, `reusable-build-buildpacks.yml`, and `reusable-build-make.yml` instead of a single Docker-only workflow.
 
 ### Kubernetes
 
@@ -758,6 +811,7 @@ Increment the major version for breaking contract changes such as:
 - renaming a secret
 - removing an output
 - changing workflow behavior in a way that requires caller changes
+- changing what an existing `branching-strategy` value resolves to (e.g. redefining what `git-flow` maps `main` to)
 
 Example:
 
@@ -770,7 +824,7 @@ v1 → v2
 Use minor or patch releases for backward-compatible changes such as:
 
 - adding optional inputs with defaults
-- adding a new `reusable-build-*.yml` or other new workflow file
+- adding a new `branching-strategy` value without changing existing ones
 - bug fixes
 - documentation improvements
 - internal workflow improvements that do not change the caller contract
@@ -865,29 +919,21 @@ The migration process is:
 
 1. Confirm that the repository can access `ci-toolkit`.
 2. Pin workflow references to a release tag.
-3. Identify the workflows actually required.
-4. Configure all required `workflow_call` inputs.
+3. Choose a branching strategy and identify the workflows actually required.
+4. Configure all required `workflow_call` inputs, including `reusable-branch-context.yml`'s `branching-strategy`.
 5. Create only the required secrets.
 6. Configure non-sensitive variables.
 7. Configure GitHub Environments where required.
-8. Select **exactly one build backend** (Docker, Buildpacks, or Make/Artifact) if the repository builds artifacts.
-9. Select **exactly one deployment strategy**.
-10. Keep the application's own manifest, Helm chart, or Compose file in the consuming repository.
-11. Configure the correct self-hosted runner where required.
-12. Configure the required GitHub Actions permissions.
-13. Verify registry, SonarQube, deployment, and notification credentials as applicable.
+8. Select **exactly one deployment target**.
+9. Keep the application's own manifest, Helm chart, or Compose file in the consuming repository.
+10. Configure the correct self-hosted runner where required.
+11. Configure the required GitHub Actions permissions.
+12. Verify registry, SonarQube, deployment, and notification credentials as applicable.
+13. Wire deploy/release job `needs:`/`if:` against both `resolve-context`'s outputs and your quality-gate jobs.
 14. Test in a non-production environment.
 15. Promote the tested workflow version to production.
 
 The repository's migration checklist explicitly recommends choosing one of:
-
-```
-reusable-docker-build.yml
-reusable-build-buildpacks.yml
-reusable-build-make.yml
-```
-
-for building, and one of:
 
 ```
 reusable-deploy-docker-compose.yml
@@ -913,8 +959,8 @@ When adding or modifying a reusable workflow:
 6. Define explicit `workflow_call` inputs.
 7. Define required secrets clearly.
 8. Document required permissions.
-9. If adding a build backend, satisfy the contract in `docs/build-interface.md`.
-10. Update `docs/reusable-workflows.md` when the workflow contract changes.
+9. Update `docs/reusable-workflows.md` when the workflow contract changes.
+10. Update `docs/branching-strategies.md` if you add or change a branching-strategy mapping.
 11. Update the relevant documentation.
 12. Update `CHANGELOG.md`.
 13. Test the workflow before creating a release.
@@ -929,6 +975,7 @@ Changes such as these are breaking changes:
 - removing a required secret
 - removing an output
 - changing a required workflow behavior
+- changing an existing branching-strategy's ref-to-environment mapping
 
 Breaking changes should receive a new major version.
 
@@ -944,19 +991,19 @@ This project is licensed under the [MIT License](https://github.com/Ahmadzadeh92
 
 # Documentation
 
-| Resource                                                                                                      | Description                                    |
-| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs)                                         | Complete configuration documentation           |
-| [`reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md)   | Complete reusable workflow contracts           |
-| [`build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md)         | Shared contract for all build backends         |
-| [`permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md)                 | GitHub Actions permissions                     |
-| [`secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md)                         | Secret inventory and requirements              |
-| [`environments.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/environments.md)               | GitHub Environments setup and protection rules |
-| [`variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)                     | Repository/environment variables               |
-| [`migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration procedure for existing repositories  |
-| [`k8s/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/k8s)                                           | Kubernetes example configuration               |
-| [`helm/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/helm)                                         | Helm example configuration                     |
-| [`docker-compose/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docker-compose)                     | Docker Compose example configuration           |
+| Resource                                                                                                      | Description                                   |
+| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| [`docs/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docs)                                         | Complete configuration documentation          |
+| [`reusable-workflows.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md)   | Complete reusable workflow contracts          |
+| [`branching-strategies.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/branching-strategies.md) | Supported branching strategies and ref→environment mappings |
+| [`build-interface.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md) | Supported build methods and their common output contract |
+| [`permissions.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/permissions.md)                 | GitHub Actions permissions                    |
+| [`secrets.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/secrets.md)                         | Secret inventory and requirements             |
+| [`variables.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/variables.md)                     | Repository/environment variables              |
+| [`migration-checklist.md`](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md) | Migration procedure for existing repositories |
+| [`k8s/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/k8s)                                           | Kubernetes example configuration              |
+| [`helm/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/helm)                                         | Helm example configuration                    |
+| [`docker-compose/`](https://github.com/Ahmadzadeh920/ci-toolkit/tree/main/docker-compose)                     | Docker Compose example configuration          |
 
 ---
 
@@ -967,22 +1014,20 @@ This project is licensed under the [MIT License](https://github.com/Ahmadzadeh92
 The key principles are:
 
 - **Reusable workflows live under `.github/workflows/`.**
-- **There are currently 13 reusable workflow contracts.**
+- **There are currently 14 reusable workflow contracts.**
+- **Build is decoupled from the application, just like deployment: pick one of `reusable-docker-build.yml`, `reusable-build-buildpacks.yml`, or `reusable-build-make.yml`.**
 - **`caller-ci.yml` is an example caller, not a reusable workflow.**
 - **Secrets remain in the consuming repository.**
 - **Application deployment configuration remains in the consuming repository.**
+- **Branching-strategy resolution is centralized in `reusable-branch-context.yml`, not duplicated per workflow.**
 - **Production workflows should use release tags rather than `main`.**
 - **GitHub Actions permissions should follow least privilege.**
 - **Kubernetes/k3s deployments use a runner with Kubernetes access already configured.**
-- **A repository should select exactly one build backend:**
-  * **Docker**
-  * **Buildpacks**
-  * **Make / Artifact**
 - **A repository should select exactly one deployment strategy:**
-  * **Docker Compose**
-  * **Kubernetes / k3s**
-  * **Helm**
-- **There is no generic build dispatcher and no generic deployment dispatcher.**
+  - **Docker Compose**
+  - **Kubernetes / k3s**
+  - **Helm**
+- **There is no generic deployment dispatcher.**
 - **The toolkit provides pipeline logic; the application repository owns its application and infrastructure configuration.**
 
-Start with the [migration checklist](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md), then use the [reusable workflow contracts](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md) to configure the workflows required by your repository.
+Start with the [migration checklist](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/migration-checklist.md), then use the [reusable workflow contracts](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/reusable-workflows.md), [branching strategies reference](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/branching-strategies.md), and [build interface reference](https://github.com/Ahmadzadeh920/ci-toolkit/blob/main/docs/build-interface.md) to configure the workflows required by your repository.

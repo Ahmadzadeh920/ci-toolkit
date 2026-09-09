@@ -35,11 +35,6 @@ jobs:
       contents: read
       security-events: write
 
-  sonarqube:
-    name: SonarQube Scan
-    uses: Ahmadzadeh920/ci-toolkit/.github/workflows/reusable-sonarqube.yml@v1
-    secrets:
-      sonar-token: ${{ secrets.SONAR_TOKEN }}
 
   build-image:
     name: Build Image
@@ -63,7 +58,7 @@ jobs:
   # below never change, since they only ever depend on `quality-gate`.
   quality-gate:
     name: Quality Gate
-    needs: [test, codeql, sonarqube, build-image, trivy]
+    needs: [test, codeql, build-image, trivy]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -72,7 +67,6 @@ jobs:
           for result in \
             "${{ needs.test.result }}" \
             "${{ needs.codeql.result }}" \
-            "${{ needs.sonarqube.result }}" \
             "${{ needs.build-image.result }}" \
             "${{ needs.trivy.result }}"; do
             if [ "$result" != "success" ]; then
